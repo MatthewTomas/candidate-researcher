@@ -157,9 +157,90 @@ function extractTitleFromHtml(html: string): string {
 // Search: DuckDuckGo (HTML endpoint — no API key needed)
 // ============================================================================
 
+/**
+ * Parse DDG HTML response using DOM selectors with multiple fallbacks.
+ * DuckDuckGo periodically changes their HTML class names, so we try
+ * several known selector patterns before falling back to regex.
+ */
+function parseDdgResults(html: string, maxResults: number): SearchResult[] {
+  const results: SearchResult[] = [];
+
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+
+    // Strategy 1: Classic DDG lite selectors (BEM-style)
+    let links = doc.querySelectorAll('.result__a, .result__title a, a.result-link');
+
+    // Strategy 2: Newer DDG selectors (observed in recent DDG HTML)
+    if (links.length === 0) {
+      links = doc.querySelectorAll('.results .result a[href*="uddg="], .web-result a[href], .links_main a');
+    }
+
+    // Strategy 3: Broadest — any link inside a result-like container
+    if (links.length === 0) {
+      links = doc.querySelectorAll('[class*="result"] a[href*="uddg="], [class*="result"] a[href*="http"]');
+    }
+
+    links.forEach(link => {
+      if (results.length >= maxResults) return;
+      const href = link.getAttribute('href');
+      if (!href) return;
+
+      let realUrl = href;
+      try {
+        const parsed = new URL(href, 'https://duckduckgo.com');
+        const uddg = parsed.searchParams.get('uddg');
+        if (uddg) realUrl = decodeURIComponent(uddg);
+      } catch {
+        // Use href as-is
+      }
+
+      // Skip DDG internal links and anchors
+      if (realUrl.includes('duckduckgo.com') || realUrl.startsWith('#') || realUrl.startsWith('/')) return;
+      // Must be an actual URL
+      if (!realUrl.startsWith('http')) return;
+
+      // Try multiple snippet selectors
+      const parentResult = link.closest('.result, [class*="result"], .web-result');
+      const snippet =
+        parentResult?.querySelector('.result__snippet, .result-snippet, [class*="snippet"]')?.textContent?.trim() ||
+        parentResult?.querySelector('td:nth-child(2)')?.textContent?.trim() || // DDG lite table layout
+        '';
+      const title = link.textContent?.trim() || realUrl;
+
+      results.push({ title, url: realUrl, snippet });
+    });
+  } catch (err) {
+    console.warn('DDG DOM parsing failed:', err);
+  }
+
+  // Strategy 4: Regex fallback — extract uddg= URLs directly from raw HTML
+  if (results.length === 0) {
+    try {
+      const uddgRegex = /uddg=([^&"']+)/g;
+      let match: RegExpExecArray | null;
+      while ((match = uddgRegex.exec(html)) !== null && results.length < maxResults) {
+        try {
+          const url = decodeURIComponent(match[1]);
+          if (url.startsWith('http') && !url.includes('duckduckgo.com')) {
+            // Check we haven't already added this URL
+            if (!results.some(r => r.url === url)) {
+              results.push({ title: url, url, snippet: '' });
+            }
+          }
+        } catch { /* skip bad URLs */ }
+      }
+    } catch (err) {
+      console.warn('DDG regex fallback failed:', err);
+    }
+  }
+
+  return results;
+}
+
 async function searchDuckDuckGo(query: string, maxResults = 8): Promise<SearchResult[]> {
   try {
-    // In development (Vite dev server), use the local proxy to bypass CORS entirely
     const isDev = typeof window !== 'undefined' && (window.location?.hostname === 'localhost' || window.location?.hostname === '127.0.0.1');
     const url = isDev
       ? `/api/ddg?q=${encodeURIComponent(query)}`
@@ -170,36 +251,16 @@ async function searchDuckDuckGo(query: string, maxResults = 8): Promise<SearchRe
       : await fetchViaCorsProxy(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, 12000);
     const html = await resp.text();
 
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
+    // Diagnostic: log DDG response summary to help debug 0-result issues
+    if (html.length < 500) {
+      console.warn(`[DDG] Very short response (${html.length} chars) — may be blocked or challenge page`);
+    }
+    // Detect common bot-block patterns
+    if (html.includes('bot') && html.includes('detected') || html.includes('captcha') || html.includes('unusual traffic')) {
+      console.warn(`[DDG] Bot detection / CAPTCHA detected in response`);
+    }
 
-    const results: SearchResult[] = [];
-    const links = doc.querySelectorAll('.result__a, .result__title a, a.result-link');
-
-    links.forEach(link => {
-      if (results.length >= maxResults) return;
-      const href = link.getAttribute('href');
-      if (!href) return;
-
-      // DDG wraps URLs — extract real URL
-      let realUrl = href;
-      try {
-        const parsed = new URL(href, 'https://duckduckgo.com');
-        const uddg = parsed.searchParams.get('uddg');
-        if (uddg) realUrl = decodeURIComponent(uddg);
-      } catch {
-        // Use href as-is
-      }
-
-      // Skip DDG internal links
-      if (realUrl.includes('duckduckgo.com')) return;
-
-      const snippet = link.closest('.result')?.querySelector('.result__snippet')?.textContent?.trim() || '';
-      const title = link.textContent?.trim() || realUrl;
-
-      results.push({ title, url: realUrl, snippet });
-    });
-
+    const results = parseDdgResults(html, maxResults);
     return results;
   } catch (err) {
     console.warn('DuckDuckGo search failed:', err);
@@ -266,11 +327,14 @@ function buildSearchQueries(name: string, meta?: CandidateMetadata): string[] {
     party === 'L' ? 'Libertarian' : party === 'G' ? 'Green' : party === 'I' ? 'Independent' : '';
 
   // Handle middle initials: "Donald M. Brown" → also search "Donald Brown"
-  // Matches single letters optionally followed by a period (e.g., "M.", "J", "R.")
   const nameWithoutMiddle = name.replace(/\s+[A-Z]\.?\s+/g, ' ').replace(/\s{2,}/g, ' ').trim();
-  // Build a list of name variants to search for
   const nameVariants = [name];
   if (nameWithoutMiddle !== name) nameVariants.push(nameWithoutMiddle);
+
+  // Extract first and last name for broader searches
+  const nameParts = name.split(/\s+/);
+  const firstName = nameParts[0] || '';
+  const lastName = nameParts[nameParts.length - 1] || '';
 
   // ── Core identity queries (use all name variants) ──
   for (const n of nameVariants) {
@@ -278,8 +342,13 @@ function buildSearchQueries(name: string, meta?: CandidateMetadata): string[] {
     queries.push(`"${n}" ${state} ${electionYear} campaign`.trim());
   }
 
-  // ── Campaign website ──
+  // ── Campaign website — multiple patterns ──
   queries.push(`"${name}" campaign website ${state} ${electionYear}`.trim());
+  // Common campaign URL patterns: "lastname for office", "firstname lastname for office"
+  if (office) {
+    const officeShort = office.replace(/\b(county|district|circuit|court|state)\b/gi, '').trim();
+    queries.push(`${firstName} ${lastName} for ${officeShort} ${state} ${electionYear}`.trim());
+  }
 
   // ── Per-platform social media (use all variants for broader coverage) ──
   for (const n of nameVariants) {
@@ -290,12 +359,37 @@ function buildSearchQueries(name: string, meta?: CandidateMetadata): string[] {
   queries.push(`"${name}" site:linkedin.com/in`.trim());
   queries.push(`"${name}" ${state} ${office} site:youtube.com`.trim());
 
+  // ── Ballotpedia discovery (OK for finding links — NOT for citing as a source) ──
+  queries.push(`"${name}" ${state} site:ballotpedia.org`.trim());
+
   // ── News from low-bias outlets ──
   for (const n of nameVariants) {
     queries.push(`"${n}" ${office} ${state} ${electionYear} site:apnews.com OR site:reuters.com OR site:npr.org OR site:pbs.org`.trim());
   }
   // Local news
   queries.push(`"${name}" ${office} ${state} ${electionYear} newspaper OR gazette OR tribune OR herald`.trim());
+
+  // ── State-specific news sources ──
+  const stateNewsMap: Record<string, string> = {
+    TX: 'site:texastribune.org OR site:dallasnews.com OR site:houstonchronicle.com OR site:statesman.com',
+    CA: 'site:latimes.com OR site:sfchronicle.com OR site:sacbee.com OR site:calmatters.org',
+    FL: 'site:tampabay.com OR site:sun-sentinel.com OR site:miamiherald.com',
+    NY: 'site:nytimes.com OR site:gothamist.com OR site:nydailynews.com',
+    PA: 'site:pennlive.com OR site:inquirer.com OR site:post-gazette.com',
+    OH: 'site:cleveland.com OR site:dispatch.com OR site:cincinnati.com',
+    GA: 'site:ajc.com OR site:savannahnow.com',
+    MI: 'site:freep.com OR site:mlive.com OR site:detroitnews.com',
+    NC: 'site:newsobserver.com OR site:charlotteobserver.com',
+    VA: 'site:richmond.com OR site:pilotonline.com OR site:virginiamercury.com',
+    AZ: 'site:azcentral.com OR site:tucson.com',
+    WI: 'site:jsonline.com OR site:madison.com',
+    MN: 'site:startribune.com OR site:twincities.com',
+    CO: 'site:denverpost.com OR site:coloradosun.com',
+    IL: 'site:chicagotribune.com OR site:suntimes.com',
+  };
+  if (stateAbbr && stateNewsMap[stateAbbr.toUpperCase()]) {
+    queries.push(`"${name}" ${office} ${electionYear} ${stateNewsMap[stateAbbr.toUpperCase()]}`.trim());
+  }
 
   // ── News with party context ──
   if (district) {
@@ -304,12 +398,25 @@ function buildSearchQueries(name: string, meta?: CandidateMetadata): string[] {
     queries.push(`"${name}" ${state} ${partyLabel} ${electionYear} election news`.trim());
   }
 
-  // ── Additional context ──
+  // ── Broader unquoted searches (catches partial name matches and variant spellings) ──
+  queries.push(`${name} ${office} ${state} ${electionYear}`.trim());
+  if (nameWithoutMiddle !== name) {
+    queries.push(`${nameWithoutMiddle} ${office} ${state} ${electionYear}`.trim());
+  }
+
+  // ── Government / official record searches ──
   if (office && state) {
     queries.push(`"${name}" "${office}" "${state}" ${electionYear}`.trim());
-    // Also try without middle initial for broader match
     if (nameWithoutMiddle !== name) {
       queries.push(`"${nameWithoutMiddle}" "${office}" "${state}" ${electionYear}`.trim());
+    }
+    // State legislature / court records
+    if (office.toLowerCase().includes('judge') || office.toLowerCase().includes('justice') || office.toLowerCase().includes('court')) {
+      queries.push(`"${name}" ${state} court judge biography OR profile`.trim());
+      queries.push(`"${name}" ${state} bar association`.trim());
+    }
+    if (office.toLowerCase().includes('representative') || office.toLowerCase().includes('senator') || office.toLowerCase().includes('legislature')) {
+      queries.push(`"${name}" ${state} legislature OR capitol`.trim());
     }
   }
 
@@ -428,27 +535,49 @@ export async function researchCandidate(
   const queries = buildSearchQueries(name, metadata);
   log(`🔎 Research phase: ${queries.length} search queries prepared (via ${actualProvider})`);
 
-  // 2. Run searches
+  // 2. Run searches with retry logic & exponential backoff
   let allSearchResults: SearchResult[] = [];
+  let consecutiveFailures = 0;
+  const MAX_CONSECUTIVE_FAILURES = 5; // circuit breaker threshold
+  const CIRCUIT_BREAKER_PAUSE_MS = 10000; // 10s pause when circuit trips
 
-  for (const query of queries) {
-    log(`� [${actualProvider}] Searching: ${query}`);
+  for (let qi = 0; qi < queries.length; qi++) {
+    const query = queries[qi];
+    log(`🔍 [${actualProvider}] Searching: ${query}`);
 
     let results: SearchResult[] = [];
     if (useGoogleCSE) {
-      results = await searchGoogleCSE(query, settings.googleSearchApiKey!, settings.googleSearchEngineId!, 5);
+      results = await searchGoogleCSE(query, settings.googleSearchApiKey!, settings.googleSearchEngineId!, 8);
     } else {
-      results = await searchDuckDuckGo(query, 5);
+      results = await searchDuckDuckGo(query, 8);
+
+      // Retry once on empty results with a longer delay
+      if (results.length === 0 && consecutiveFailures < MAX_CONSECUTIVE_FAILURES) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        results = await searchDuckDuckGo(query, 8);
+      }
     }
 
     allSearchResults.push(...results);
     log(`   Found ${results.length} result(s)`);
+
     if (results.length === 0) {
-      log(`   ⚠ No results — ${actualProvider} may be rate-limited or the query may be too specific`);
+      consecutiveFailures++;
+      log(`   ⚠ No results (${consecutiveFailures} consecutive failures)`);
+
+      // Circuit breaker: if many consecutive failures, pause and warn
+      if (consecutiveFailures === MAX_CONSECUTIVE_FAILURES) {
+        log(`   ⏸ ${MAX_CONSECUTIVE_FAILURES} consecutive failures — pausing ${CIRCUIT_BREAKER_PAUSE_MS / 1000}s before continuing`);
+        await new Promise(resolve => setTimeout(resolve, CIRCUIT_BREAKER_PAUSE_MS));
+      }
+    } else {
+      consecutiveFailures = 0; // reset on success
     }
 
-    // Small delay between searches to be polite
-    await new Promise(resolve => setTimeout(resolve, 500));
+    // Exponential backoff between queries: 1s base, doubles on failures, caps at 5s
+    const baseDelay = 1000;
+    const backoffDelay = Math.min(baseDelay * Math.pow(1.5, Math.min(consecutiveFailures, 4)), 5000);
+    await new Promise(resolve => setTimeout(resolve, backoffDelay));
   }
 
   // 3. Deduplicate URLs
@@ -482,8 +611,8 @@ export async function researchCandidate(
     }
   }
 
-  // 4. Fetch pages — limit to top ~18 to cover social + news + campaign
-  const urlsToFetch = uniqueResults.slice(0, 18);
+  // 4. Fetch pages — limit to top ~25 to cover social + news + campaign
+  const urlsToFetch = uniqueResults.slice(0, 25);
   const pages: FetchedPage[] = [];
   let totalFailed = 0;
 

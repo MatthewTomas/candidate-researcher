@@ -313,13 +313,18 @@ const NO_SOURCE_SENTINEL = '(No source material found from web research)';
 function prepareSourceContent(sourceContent: string, candidateName: string): string {
   const trimmed = sourceContent.trim();
   if (!trimmed || trimmed === NO_SOURCE_SENTINEL) {
+    // Extract first name for use in templates
+    const firstName = candidateName.split(/\s+/)[0];
     return `⚠ NO SOURCE MATERIAL AVAILABLE ⚠
 No web research results were found for ${candidateName}.
 
 STRICT INSTRUCTIONS FOR NO-SOURCE PROFILES:
 - Do NOT fabricate any claims, quotes, URLs, or biographical details.
 - Do NOT invent social media links, campaign websites, or news articles.
-- For bios: only include information from the candidate metadata (name, party, office, state) if available.
+- Do NOT output template placeholders like [hometown], [degree], [Institution], [job title], [Employer Name], [Spouse Name], or any text in [square brackets]. These are template examples — NOT fill-in-the-blank patterns.
+- For personal bio: write "As of February 2026, ${candidateName}'s personal background information was not available." and set complete: false.
+- For professional bio: write "As of February 2026, ${candidateName}'s professional background information was not available." and set complete: false.
+- For political bio: write "As of February 2026, ${firstName} has not held elected office." and set complete: false.
 - For each issue category: write a single stance stating "As of February 2026, ${candidateName}'s public statements did not contain information on this issue." and set missingData: "issue-specific".
 - Every source array must be EMPTY []. Do not create fake sources.
 - The links array must be EMPTY [].`;
@@ -501,11 +506,34 @@ ADDITIONAL RULES:
 - Family: number of children, not their names
 - Keep each bio CONCISE — 1-3 sentences. Do NOT write essays or narratives.`;
 
-  return provider.generateJSON<Pick<StagingDraft, 'name'> & { links: any[]; bios: any[] }>(prompt, {
+  const result = await provider.generateJSON<Pick<StagingDraft, 'name'> & { links: any[]; bios: any[] }>(prompt, {
     systemPrompt: getCustomPrompt('writer') ?? WRITER_SYSTEM_PROMPT,
     temperature: 0.3,
     maxTokens: 8192,
   });
+
+  // Post-process: strip template bracket placeholders that the LLM may have output
+  // when no source material was available (e.g., "[hometown]", "[degree]", "[Spouse Name]")
+  if (result.bios) {
+    const bracketPattern = /\[(?:hometown|degree|subject|Institution|job title|Employer Name|city|wife|husband|partner|Spouse Name|#|First name|He\/She\/They|his\/her\/their)\]/gi;
+    for (const bio of result.bios) {
+      if (bio.text && bracketPattern.test(bio.text)) {
+        const firstName = input.candidateName.split(/\s+/)[0];
+        // The bio contains unfilled template placeholders — replace with proper "not available" text
+        if (bio.type === 'personal') {
+          bio.text = `As of February 2026, ${input.candidateName}'s personal background information was not available.`;
+        } else if (bio.type === 'professional') {
+          bio.text = `As of February 2026, ${input.candidateName}'s professional background information was not available.`;
+        } else if (bio.type === 'political') {
+          bio.text = `As of February 2026, ${firstName} has not held elected office.`;
+        }
+        bio.sources = [];
+        bio.complete = false;
+      }
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -638,7 +666,7 @@ async function planIssueCategories(
   const trimmed = input.sourceContent.trim();
   const isSourceless = !trimmed || trimmed === '(No source material found from web research)';
   if (isSourceless) {
-    // Return a minimal set — Writer will mark all as "no public position"
+    // Return a minimal set — Writer will mark all as "no information available"
     return ['economy', 'public-safety', 'healthcare', 'education'];
   }
 
@@ -647,15 +675,15 @@ async function planIssueCategories(
 SOURCE MATERIAL:
 ${input.sourceContent.slice(0, 6000)}
 
-Return a JSON array of issue category keys (lowercase, hyphenated). Choose from this list, ordered from MOST preferred to LEAST preferred:
-["economy", "public-safety", "healthcare", "education", "environment", "immigration", "housing", "transportation", "gun-policy", "abortion", "civil-rights", "foreign-policy", "technology", "agriculture", "veterans", "criminal-justice", "consumer-protection", "government-reform", "labor", "social-services", "infrastructure", "legal-experience", "candidates-background"]
+Return a JSON array of issue category keys (lowercase, hyphenated). Choose ONLY from this list:
+["economy", "public-safety", "healthcare", "education", "energy-environment", "foreign-policy-immigration", "voting-elections", "consumer-protection", "housing-urban-development", "public-services", "public-health", "school-curriculum", "businesses", "small-businesses", "fire-safety", "insurance", "teachers", "administration", "criminal-justice", "taxes", "financial-management", "retirement", "ethics-corruption"]
 
 RULES:
 - Only include categories where the candidate has SPECIFIC stated positions in the source material.
-- Prefer categories higher in the list (economy, public-safety, healthcare, education) over generic ones.
-- AVOID "legal-experience" and "candidates-background" unless strongly supported — these are catch-all categories and should only be used when the source material explicitly discusses legal qualifications or personal background as a campaign issue.
+- RANK categories by how much source material supports them — strongest first.
 - Each category must have at least one concrete, sourceable policy stance.
 - Return 4-8 categories maximum.
+- If fewer than 4 categories have strong support, return only what is supported — do NOT pad with unsupported categories.
 
 Return the JSON array only.`;
 
