@@ -2,7 +2,7 @@
  * Export Service — converts internal data to Branch JSON format and markdown.
  */
 
-import type { StagingDraft, AuditReport } from '../types';
+import type { StagingDraft } from '../types';
 
 /**
  * Export a profile as the Branch stagingDraft JSON format.
@@ -14,11 +14,15 @@ export function exportAsBranchJSON(draft: Partial<StagingDraft>, candidateName: 
     bios: (draft.bios || []).map(bio => ({
       type: bio.type,
       text: bio.text,
+      confidence: bio.confidence,
+      confidenceReason: bio.confidenceReason,
       sources: (bio.sources || []).map(s => ({
         sourceType: s.sourceType,
         directQuote: s.directQuote,
         url: s.url,
         title: s.title,
+        confidence: s.confidence,
+        confidenceReason: s.confidenceReason,
       })),
       complete: bio.complete,
       missingData: bio.missingData,
@@ -39,10 +43,14 @@ export function exportAsBranchJSON(draft: Partial<StagingDraft>, candidateName: 
       missingData: issue.missingData,
       stances: (issue.stances || []).map(stance => ({
         text: stance.text,
+        confidence: stance.confidence,
+        confidenceReason: stance.confidenceReason,
         sources: (stance.sources || []).map(s => ({
           sourceType: s.sourceType,
           directQuote: s.directQuote,
           url: s.url,
+          confidence: s.confidence,
+          confidenceReason: s.confidenceReason,
         })),
         complete: stance.complete,
         directQuote: stance.directQuote || stance.sources?.[0]?.directQuote || '',
@@ -194,6 +202,13 @@ export function exportAsMarkdown(draft: Partial<StagingDraft>, candidateName: st
     for (const source of bio.sources || []) {
       lines.push(`SOURCE URL: ${source.url}`);
       lines.push(`SUPPORTING QUOTE: "${source.directQuote}"`);
+      if (source.confidence != null && source.confidence < 0.8) {
+        lines.push(`CONFIDENCE: ${Math.round(source.confidence * 100)}% — ${source.confidenceReason || 'unverified'}`);
+      }
+      lines.push('');
+    }
+    if (bio.confidence != null && bio.confidence < 0.8) {
+      lines.push(`> ⚠ Bio confidence: ${Math.round(bio.confidence * 100)}%${bio.confidenceReason ? ' — ' + bio.confidenceReason : ''}`);
       lines.push('');
     }
   }
@@ -206,9 +221,15 @@ export function exportAsMarkdown(draft: Partial<StagingDraft>, candidateName: st
     }
     for (const stance of issue.stances || []) {
       lines.push(`- ${stance.text}`);
+      if (stance.confidence != null && stance.confidence < 0.8) {
+        lines.push(`  CONFIDENCE: ${Math.round(stance.confidence * 100)}%${stance.confidenceReason ? ' — ' + stance.confidenceReason : ''}`);
+      }
       for (const source of stance.sources || []) {
         lines.push(`  SOURCE URL: ${source.url}`);
         lines.push(`  SUPPORTING QUOTE: "${source.directQuote}"`);
+        if (source.confidence != null && source.confidence < 0.8) {
+          lines.push(`  CONFIDENCE: ${Math.round(source.confidence * 100)}% — ${source.confidenceReason || 'unverified'}`);
+        }
       }
     }
     lines.push('');
@@ -218,30 +239,9 @@ export function exportAsMarkdown(draft: Partial<StagingDraft>, candidateName: st
 }
 
 /**
- * Export audit report as markdown.
+ * Export build log as plain text.
  */
-export function exportAuditReport(report: AuditReport): string {
-  const lines: string[] = [];
-  lines.push(`# Audit Report: ${report.candidateName}`);
-  lines.push(`Generated: ${report.timestamp}`);
-  lines.push('');
-  lines.push(`## Summary`);
-  lines.push(`- Total Claims: ${report.summary.totalClaims}`);
-  lines.push(`- Verified: ${report.summary.verified}`);
-  lines.push(`- Contradicted: ${report.summary.contradicted}`);
-  lines.push(`- Unverified: ${report.summary.unverified}`);
-  lines.push(`- Overall Confidence: ${(report.summary.overallConfidence * 100).toFixed(0)}%`);
-  lines.push('');
-  lines.push('## Claims');
-  for (const result of report.results) {
-    lines.push(`### ${result.claim.text}`);
-    lines.push(`**Consensus:** ${result.consensus} (${(result.confidence * 100).toFixed(0)}%)`);
-    lines.push(`**Explanation:** ${result.explanation}`);
-    lines.push('');
-    for (const vr of result.verifierResults) {
-      lines.push(`- [${vr.providerUsed}] ${vr.verdict} (${(vr.confidence * 100).toFixed(0)}%): ${vr.explanation}`);
-    }
-    lines.push('');
-  }
-  return lines.join('\n');
+export function exportBuildLog(log: string[], candidateName: string): string {
+  const header = `Build Log: ${candidateName}\nExported: ${new Date().toLocaleString()}\n${'─'.repeat(60)}\n`;
+  return header + log.join('\n');
 }

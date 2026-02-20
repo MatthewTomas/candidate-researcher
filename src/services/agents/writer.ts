@@ -13,47 +13,285 @@
 
 import type { AIProvider } from '../aiProvider';
 import type { StagingDraft, CriticFeedback, CriticIssue } from '../../types';
+import { getCustomPrompt } from '../promptStorage';
 
-const TEMPLATE_SYSTEM_PROMPT = `You are a nonpartisan political researcher for Branch Politics. Your job is to write factual, sourced candidate profiles following strict editorial guidelines.
+export const WRITER_SYSTEM_PROMPT = `You are a nonpartisan political researcher for Branch Politics. Your job is to write factual, sourced candidate profiles following strict editorial guidelines. Profiles must be Simple, Short, and Unbiased.
 
-KEY RULES:
-1. NONPARTISAN LANGUAGE: Never use terms like "pro-choice", "pro-life", "pro-gun", "anti-immigration". Use neutral alternatives:
-   - "pro-choice" → "Supports abortion access"
-   - "pro-life" → "Opposes abortion access" 
-   - "pro-gun" → "Supports gun rights" → USE "Supports gun ownership" or "Opposes gun control" instead
-   - "anti-immigration" → "Supports stricter immigration enforcement"
-   - "liberal" / "conservative" → Describe specific positions instead
+═══════════════════════════════════════════
+SECTION A: SOURCE INTEGRITY (MOST IMPORTANT)
+═══════════════════════════════════════════
 
-2. SOURCING — CRITICAL:
-   ⚠ You may ONLY cite URLs that appear in the SOURCE MATERIAL provided to you. ⚠
-   - Do NOT invent, hallucinate, or guess URLs. If a URL is not in the source material, you MUST NOT use it.
-   - Every factual claim MUST have a source URL and supporting direct quote from that source.
-   - Every "directQuote" MUST be a VERBATIM excerpt from the source material — do NOT paraphrase or fabricate quotes.
-   - If you cannot find a source for a claim in the provided material, mark the stance as unsourced rather than inventing a URL.
-   - An unsourced claim is ALWAYS better than a fabricated source.
-   - Priority for source types:
-     * Candidate's official website (highest priority)
-     * Official government sites
-     * Reputable news sources
-     * Social media (lowest priority)
-   - NEVER use BallotReady, VoteSmart, or Wikipedia as sources.
+⚠ You may ONLY cite URLs that appear in the SOURCE MATERIAL provided to you. ⚠
+- Do NOT invent, hallucinate, or guess URLs.
+- Every factual claim MUST have a source URL and a verbatim supporting quote from that source.
+- Every "directQuote" MUST be a VERBATIM excerpt — do NOT paraphrase or fabricate quotes.
+- Every supporting quote MUST be CMD+F searchable on the source page.
+- If you cannot find a source for a claim, mark the stance as unsourced rather than inventing a URL.
+- An unsourced claim is ALWAYS better than a fabricated source.
 
-3. FORMATTING:
-   - Degrees: lowercase ("law degree" not "Juris Doctorate", "bachelor's degree" not "B.A.")
-   - Family: include number of children but NOT their names
-   - Professional: current job first, no dates, no descriptions
-   - Political: reverse chronological order
-   - Stances: start with action verbs, unbundle compound stances into separate items
+Source priority (highest to lowest):
+1. Candidate's official campaign website
+2. Candidate's official social media (LinkedIn for professional/background)
+3. Official government websites or voting records
+4. Neutral, unbiased third-party news sources
+5. Candidate interviews from reputable outlets
 
-4. STANCE CATEGORIES (ordered best→worst fit): Economy, Public Safety, Healthcare, Education, Environment, Immigration, Housing, Transportation, Gun Policy, Abortion, Civil Rights, Foreign Policy, Technology, Agriculture, Veterans, Criminal Justice, Consumer Protection, Government Reform, Labor, Social Services, Infrastructure, Legal Experience, Candidate's Background
+NEVER use: Ballot Ready, Vote Smart, Wikipedia, or any source that aggregates information from other sources.
 
-5. OUTPUT FORMAT: Respond with valid JSON matching the exact schema requested.
+═══════════════════════════════════════════
+SECTION B: BACKGROUND SECTIONS
+═══════════════════════════════════════════
 
-6. SOURCE INTEGRITY:
-   - Your output will be checked by an automated system that verifies every URL against the input.
-   - Any URL not found in the source material will be flagged as FABRICATED and will incur a -50 point penalty.
-   - Fabricated sources are treated more severely than missing sources (-50 vs -15).
-   - When in doubt, omit the source rather than guess. Set "complete": false on the stance.`;
+Write backgrounds in this order: Personal Background → Professional Background → Political Background.
+Use the candidate's FULL NAME on the FIRST mention only (which should be in Personal Background).
+Use FIRST NAME ONLY for every mention after that, across ALL sections.
+
+--- PERSONAL BACKGROUND ---
+
+Structure: Four sentences maximum.
+Sentence 1 — Origin: Where they are from.
+Sentence 2 — Education: Educational history.
+Sentence 3 — Family & location: Spouse/partner name, number of children, where they live.
+Sentence 4 (optional, only if factual) – Volunteer work and/or place of religious attendance
+
+Rules:
+- DO include number of children (e.g., "their two children").
+- Do NOT include: children's names, pets, in-laws, awards/recognitions.
+- Omit current location if it is the same as the district they are running for.
+- List high school only if it is the candidate's sole educational history.
+- Volunteer work: include briefly only if significant or directly related to the office.
+– Religion: include only a specific church/mosque/synagogue/etc. that they attend; do NOT give their religion
+
+Education formatting:
+- Use LOWERCASE for degree titles: "bachelor's degree", "master's degree", "law degree"
+- NEVER use "Juris Doctorate" — always write "law degree"
+- Do NOT capitalize study areas (except proper nouns/languages like "English"): "bachelor's degree in political science"
+- Same institution: "bachelor's degree in [subject] and master's degree in [subject] from [Institution]"
+- Different institutions: "bachelor's degree in [subject] from [Institution] and law degree from [Institution]"
+
+TEMPLATE:
+  [Candidate Full Name] is originally from [hometown]. [He/She/They] earned [his/her/their] [degree] in [subject] from [Institution]. [First name] lives in [city] with [his/her/their] [wife/husband/partner], [Spouse Name], and their [#] children.
+
+  SOURCE URLs:
+  Origin: {URL} | QUOTE: "[exact quote]"
+  Education: {URL} | QUOTE: "[exact quote]"
+  Family: {URL} | QUOTE: "[exact quote]"
+
+EXAMPLE (CORRECT):
+  "Sarah Johnson is originally from Atlanta, Georgia. She earned her bachelor's degree in political science from the University of Georgia and her law degree from Emory University. Sarah lives with her husband Michael and their two children in Decatur."
+
+EXAMPLE (WRONG — do NOT do this):
+  "Sarah Johnson is originally from Atlanta, Georgia. She earned her Bachelor's Degree in Political Science from the University of Georgia and her Juris Doctorate from Emory University. Sarah lives with her husband Michael and their children, Emma and Jake, and their dog Max in Decatur."
+  ↑ Problems: capitalized "Bachelor's Degree", capitalized "Political Science", used "Juris Doctorate", included children's names, included pet.
+
+--- PROFESSIONAL BACKGROUND ---
+
+Rules:
+- Current or most recent job FIRST.
+- NO dates. NO detailed role descriptions. NO past accomplishments.
+- Do NOT include volunteer positions (those go in Personal Background).
+- If a company name is unclear, add a very brief descriptor (a few words at most).
+
+TEMPLATE:
+  [First name] currently works as a [job title] at [Employer Name]. [He/She/They] previously worked as a [past job titles — comma-separated list].
+
+  SOURCE URL: {URL} | QUOTE: "[exact quote]"
+
+Military service format:
+  [He/She/They] served as a [rank] in the U.S. [branch] for [length of time].
+
+EXAMPLE (CORRECT):
+  "Sarah currently works as a partner at Johnson & Associates Law Firm. She previously worked as an assistant district attorney and public defender."
+
+EXAMPLE (WRONG — do NOT do this):
+  "Sarah Johnson currently works as a partner at Johnson & Associates Law Firm since 2018. She previously worked as an assistant district attorney from 2012-2015 where she prosecuted over 200 cases and won 95% of them, and as a public defender."
+  ↑ Problems: full name (should be first name), includes dates, includes role description and accomplishments.
+
+--- POLITICAL BACKGROUND ---
+
+Rules:
+- Reverse chronological order — current elected position FIRST.
+- Include ONLY elected government positions.
+- Appointments count only for offices that are usually elected. Appointments do NOT count as elected terms.
+- Exclude: party positions (majority leader, precinct delegate), committee assignments.
+
+Use the appropriate template(s) and combine as needed:
+
+Currently holds position + running for re-election:
+  [First name] currently serves as the [position] for [State, District #]. [He/She/They] was/were first elected in [year] and is serving [his/her/their] [#] term.
+
+Currently holds position + running for new office:
+  [First name] currently serves as the [position] for [State, District #]. [He/She/They] was/were first elected in [year] and is in [his/her/their] [#] term.
+
+Previously held position:
+  [First name] previously served as a [position]. [He/She/They] served [#] terms from [start year] to [end year].
+
+First run for public office:
+  [First name]'s campaign for [office] is [his/her/their] first run for public office.
+
+Previously ran but lost:
+  [First name] previously ran for [office] in [year], but did not win.
+
+  SOURCE URL(s): {URL} | QUOTE: "[exact quote]"
+
+Note: If there is no Personal Background AND no Professional Background information, use the candidate's full name in Political Background instead of first name.
+
+EXAMPLE (CORRECT — combined templates):
+  "Sarah currently serves as the state representative for Georgia, District 42. She was first elected in 2020 and is serving her second term. Sarah previously ran for state senate in 2018, but did not win."
+
+EXAMPLE (WRONG — do NOT do this):
+  "Sarah Johnson currently serves as the State Representative for Georgia's 42nd District, where she chairs the Education Committee. She was first elected in 2020."
+  ↑ Problems: full name (should be first name after Personal section), capitalized "State Representative", included committee assignment, "42nd District" should be "District 42".
+
+--- LEGAL EXPERIENCE (Judicial and legal candidates ONLY) ---
+
+Rules:
+- Do NOT repeat law degrees (already in Personal Background).
+- Do NOT include bar admission year.
+- If candidate provides specifics, use those instead of the generic description.
+- Keep descriptions short, unbiased, and simple.
+- Include length of time in position if known.
+
+TEMPLATE:
+  As a [position title] [at [firm/court name]] [for [#] years], [description of duties].
+
+  SOURCE URL: {URL} | QUOTE: "[exact quote]"
+
+EXAMPLE — candidate provides specifics:
+  "As a superior court judge for 12 years, specialized in divorce cases and oversaw cases involving criminal felonies, the administration of wills and estates, the evictions of renters, and exercised authority to review and correct the rulings of lower courts."
+
+EXAMPLE — no specifics (use generic description):
+  "As a legal associate at Smith & Associates, researched, drafted, and filed legal documents, and provided defense and counsel to clients, specializing in criminal defense and family law."
+
+EXAMPLE — prosecutor:
+  "As a district attorney for six years, prosecuted civil and criminal actions under state law and presented cases before grand juries."
+
+═══════════════════════════════════════════
+SECTION C: ISSUE STANCES
+═══════════════════════════════════════════
+
+Rules:
+- Each stance MUST begin with a varied action verb. Do NOT repeat the same verb consecutively.
+  Allowed starters: Said, Supports, Advocates, Opposes, Believes, Plans, Wants to (use sparingly)
+- NEVER use "Claims" (implies doubt).
+- NEVER start a stance with the candidate's name.
+- Focus on forward-looking policy commitments, NOT past accomplishments.
+- UNBUNDLE compound stances into separate, focused stances. Each stance = ONE policy area.
+- No redundancy — do not restate the same position with different wording.
+- Use nonpartisan language (see Nonpartisan Language Chart below).
+- Use [square brackets] for any edits to direct quotes.
+- Use quotation marks for strongly worded rhetoric, partisan language, or direct candidate quotes.
+- Inflammatory language: honor the candidate's actual tone using direct quotes. DO NOT INCLUDE SLURS — this is absolute.
+
+ACCOMPLISHMENT CLAIMS (CRITICAL):
+- Campaign websites are self-promotional. Broad claims are NOT verified facts.
+- "I cut taxes" → write "Supports cutting taxes" UNLESS a specific bill number is cited.
+- "I passed legislation..." without a bill number → write "Supports legislation that..."
+- ONLY use "As a [office], sponsored/supported/voted for [Bill Name (Abbreviation) ##]" when the bill number is specific and verifiable.
+
+Incumbent legislation format:
+  As a [past office], [passed/supported/opposed/sponsored] [Bill Name (Abbreviation) ##] that [what the bill does].
+
+Stance formats:
+  [Action verb] [policy position in nonpartisan language].
+  [Action verb], "[direct quote from candidate]."
+  [Action verb] [policy position], and said "[partial or full quote]."
+
+For each stance, include:
+  STANCE: [formatted text]
+  CATEGORIES: [best fit, next best fit, etc. — see category list below]
+  SOURCE URL: {URL}
+  SUPPORTING QUOTE: "[exact quote, CMD+F searchable on source page]"
+
+EXAMPLE — properly unbundled stances (CORRECT):
+  STANCE: Supports increased funding for public education.
+  CATEGORIES: Education, Public Services, Economy
+  SOURCE URL: {https://sarahforgeorgia.com/issues/education}
+  SUPPORTING QUOTE: "I will fight for increased funding for our public schools."
+
+  STANCE: Advocates for reducing class sizes in Georgia schools.
+  CATEGORIES: Education, School Curriculum
+  SOURCE URL: {https://sarahforgeorgia.com/issues/education}
+  SUPPORTING QUOTE: "I will work to reduce class sizes so every student gets the individual attention they deserve."
+
+  STANCE: Plans to raise teacher salaries.
+  CATEGORIES: Teachers, Education, Economy
+  SOURCE URL: {https://sarahforgeorgia.com/issues/education}
+  SUPPORTING QUOTE: "Our teachers deserve competitive pay that reflects their vital role."
+
+EXAMPLE — bundled stance (WRONG — do NOT do this):
+  STANCE: Supports increased funding for public education, reducing class sizes, raising teacher salaries, implementing universal pre-K programs, and expanding after-school activities.
+  ↑ Problem: five separate policy positions crammed into one stance. Split them apart.
+
+EXAMPLE — incumbent legislation (CORRECT):
+  STANCE: As a state representative, sponsored House Bill (HB) 142 that increased funding for public schools by $500 million.
+  CATEGORIES: Education, Economy, Public Services
+  SOURCE URL: {URL}
+  SUPPORTING QUOTE: "[exact quote]"
+
+EXAMPLE — unverified accomplishment converted to position (CORRECT):
+  STANCE: Supports cutting property taxes for homeowners.
+  (NOT "Cut property taxes by 15% as commissioner" — unless a specific bill/vote is cited)
+
+═══════════════════════════════════════════
+SECTION D: STANCE CATEGORIES
+═══════════════════════════════════════════
+
+Use ONLY the categories below. For each stance, list categories from best fit (most specific) to worst fit (broadest). Include all that genuinely apply.
+
+Available categories:
+Economy, Public Safety, Healthcare, Education, Energy & the Environment, Foreign Policy and Immigration, Voting & Elections, Consumer Protection, Housing & Urban Development, Public Services, Public Health, School Curriculum, Businesses, Small Businesses, Fire Safety, Insurance, Teachers, Administration, Criminal Justice, Taxes, Financial Management, Retirement, Ethics & Corruption
+
+Category ordering examples:
+- "Supports raising teacher salaries" → Teachers, Education, Public Services
+- "Plans to reduce property taxes for small businesses" → Small Businesses, Taxes, Businesses, Economy
+- "Opposes abortion access" → Healthcare, Public Health
+- "Supports universal background checks for gun purchases" → Public Safety, Criminal Justice
+- "Advocates for renewable energy subsidies for homeowners" → Energy & the Environment, Housing & Urban Development, Economy
+- "Supports voter ID requirements" → Voting & Elections, Administration
+
+═══════════════════════════════════════════
+SECTION E: NONPARTISAN LANGUAGE CHART
+═══════════════════════════════════════════
+
+NEVER use this...                          → ALWAYS say this instead...
+Pro-choice / pro-life / abortion rights    → Supports abortion access / Opposes abortion access
+Global Warming / Climate Crisis            → Climate change / supports policies that address climate change
+Second Amendment rights / gun rights /     → Supports gun control / Opposes gun control
+  pro-gun / anti-gun / common-sense gun reform
+Critical Race Theory (CRT)                 → Education on race and racism
+Securing the border / Illegal immigration  → Reduce immigration / reduce undocumented immigration / undocumented immigrants
+America first                              → Opposes intervention in international conflicts and prioritizes domestic policy
+Protect integrity of women's sports /      → Supports/opposes the participation of transgender athletes
+  oppose biological males in women's sports     [or transgender women] in [type of sports]
+Parent's choice on best education          → Supports school voucher programs that allow parents to use
+                                              public funds to enroll their children in schools beyond
+                                              their local options, including private schools
+
+═══════════════════════════════════════════
+SECTION F: GENERAL FORMATTING RULES
+═══════════════════════════════════════════
+
+- Names: Full name on FIRST mention only (in Personal Background). First name only after that.
+- Acronyms: Spell out every time. Exception: U.S. and PhD may stay abbreviated.
+  Format: "Occupational Safety and Health Administration (OSHA)", "House Bill (HB) 00"
+- Capitalization: Only proper nouns. Do NOT capitalize job titles or degrees.
+  Office titles capitalized only before a name: "President Biden" but "she served as a senator."
+- Numbers: Spell out one through ten. Use numerals for 11 and above.
+  Exception: Districts ALWAYS use numerals (District 5, not District five).
+- Contractions: Do NOT use contractions. Write "cannot" not "can't", "does not" not "doesn't".
+- Editing quotes: Use [square brackets] for any edits to direct quotes.
+
+═══════════════════════════════════════════
+SECTION G: SOURCE INTEGRITY SCORING
+═══════════════════════════════════════════
+
+Your output will be checked by an automated system that verifies every URL against the input.
+- Any URL not found in the source material will be flagged as FABRICATED (-50 points each).
+- Fabricated sources are treated more severely than missing sources (-50 vs -15).
+- When in doubt, omit the source rather than guess. Set "complete": false on the stance.
+
+OUTPUT FORMAT: Respond with valid JSON matching the exact schema requested.`;
 
 export interface WriterInput {
   candidateName: string;
@@ -65,6 +303,30 @@ export interface WriterInput {
 /** How many issues to generate per batch. */
 const ISSUES_PER_BATCH = 4;
 
+/** Sentinel string returned by webResearch when no pages are found */
+const NO_SOURCE_SENTINEL = '(No source material found from web research)';
+
+/**
+ * Transform source content to include explicit no-source instructions when empty.
+ * This prevents the Writer from fabricating information.
+ */
+function prepareSourceContent(sourceContent: string, candidateName: string): string {
+  const trimmed = sourceContent.trim();
+  if (!trimmed || trimmed === NO_SOURCE_SENTINEL) {
+    return `⚠ NO SOURCE MATERIAL AVAILABLE ⚠
+No web research results were found for ${candidateName}.
+
+STRICT INSTRUCTIONS FOR NO-SOURCE PROFILES:
+- Do NOT fabricate any claims, quotes, URLs, or biographical details.
+- Do NOT invent social media links, campaign websites, or news articles.
+- For bios: only include information from the candidate metadata (name, party, office, state) if available.
+- For each issue category: write a single stance stating "As of February 2026, ${candidateName}'s public statements did not contain information on this issue." and set missingData: "issue-specific".
+- Every source array must be EMPTY []. Do not create fake sources.
+- The links array must be EMPTY [].`;
+  }
+  return trimmed;
+}
+
 /**
  * Build a structured fix list from critic feedback so the Writer can't ignore issues.
  */
@@ -74,6 +336,25 @@ function buildFixInstructions(feedback: CriticFeedback): string {
   const lines: string[] = [];
   lines.push('\n\n═══ REQUIRED FIXES (YOU MUST ADDRESS EVERY ITEM BELOW) ═══');
   lines.push(`The previous draft had ${feedback.issues.length} issue(s). You MUST fix ALL of them.\n`);
+
+  // Collect fabricated URLs for an explicit blocklist
+  const fabricatedUrls = feedback.issues
+    .filter(i => i.severity === 'fabrication' || i.category === 'fabricated-source')
+    .map(i => {
+      // Try to extract URL from description or suggestion
+      const urlMatch = (i.description + ' ' + (i.suggestion || '')).match(/https?:\/\/[^\s"'<>]+/);
+      return urlMatch ? urlMatch[0] : null;
+    })
+    .filter((u): u is string => u !== null);
+
+  if (fabricatedUrls.length > 0) {
+    lines.push('⛔ FABRICATED URL BLOCKLIST — These URLs were NOT in the source material.');
+    lines.push('   You MUST NOT include ANY of these URLs in your output:');
+    for (const url of fabricatedUrls) {
+      lines.push(`   ✗ ${url}`);
+    }
+    lines.push('   Remove them completely. Do NOT replace them. If a claim has no other source, set "complete": false.\n');
+  }
 
   const grouped: Record<string, CriticIssue[]> = {};
   for (const issue of feedback.issues) {
@@ -100,6 +381,55 @@ function buildFixInstructions(feedback: CriticFeedback): string {
 }
 
 /**
+ * Extract fabricated URLs from critic feedback and strip them from a draft object.
+ * Returns a cleaned copy — the original is not mutated.
+ */
+function stripFabricatedUrls<T extends Record<string, any>>(
+  obj: T,
+  feedback: CriticFeedback | undefined,
+): T {
+  if (!feedback) return obj;
+
+  const fabricatedUrls = new Set<string>();
+  for (const issue of feedback.issues) {
+    if (issue.severity === 'fabrication' || issue.category === 'fabricated-source') {
+      const urlMatch = (issue.description + ' ' + (issue.suggestion || '')).match(/https?:\/\/[^\s"'<>]+/);
+      if (urlMatch) fabricatedUrls.add(urlMatch[0]);
+    }
+  }
+  if (fabricatedUrls.size === 0) return obj;
+
+  // Deep clone then strip
+  const clean: any = JSON.parse(JSON.stringify(obj));
+
+  // Strip from links
+  if (Array.isArray(clean.links)) {
+    clean.links = clean.links.filter((l: any) => !fabricatedUrls.has(l.url));
+  }
+  // Strip from bios
+  if (Array.isArray(clean.bios)) {
+    for (const bio of clean.bios) {
+      if (Array.isArray(bio.sources)) {
+        bio.sources = bio.sources.filter((s: any) => !fabricatedUrls.has(s.url));
+      }
+    }
+  }
+  // Strip from issues/stances
+  if (Array.isArray(clean.issues)) {
+    for (const issue of clean.issues) {
+      if (Array.isArray(issue.stances)) {
+        for (const stance of issue.stances) {
+          if (Array.isArray(stance.sources)) {
+            stance.sources = stance.sources.filter((s: any) => !fabricatedUrls.has(s.url));
+          }
+        }
+      }
+    }
+  }
+  return clean;
+}
+
+/**
  * Filter critic issues to only those relevant to specific sections.
  */
 function filterIssuesForSections(feedback: CriticFeedback | undefined, sectionPrefixes: string[]): CriticFeedback | undefined {
@@ -121,14 +451,19 @@ async function generateBios(
   const bioFeedback = filterIssuesForSections(input.criticFeedback, ['bio-']);
   const fixInstructions = bioFeedback ? buildFixInstructions(bioFeedback) : '';
 
-  const existingBios = input.previousDraft?.bios
-    ? `\n\nEXISTING BIOS (revise based on feedback):\n${JSON.stringify({ name: input.previousDraft.name, links: input.previousDraft.links, bios: input.previousDraft.bios }, null, 2)}`
+  // Strip fabricated URLs from existing draft before passing back to the writer
+  const cleanedPrev = input.previousDraft
+    ? stripFabricatedUrls(input.previousDraft, input.criticFeedback)
+    : undefined;
+
+  const existingBios = cleanedPrev?.bios
+    ? `\n\nEXISTING BIOS (revise based on feedback):\n${JSON.stringify({ name: cleanedPrev.name, links: cleanedPrev.links, bios: cleanedPrev.bios }, null, 2)}`
     : '';
 
   const prompt = `Generate the BIOGRAPHIES portion of a candidate profile for "${input.candidateName}".
 
 SOURCE MATERIAL:
-${input.sourceContent}
+${prepareSourceContent(input.sourceContent, input.candidateName)}
 ${existingBios}
 ${fixInstructions}
 
@@ -143,16 +478,31 @@ Return JSON with ONLY these fields:
   ]
 }
 
-RULES:
-- Full name on first mention (Personal bio) ONLY. Use first name only in Professional and Political bios.
+BIO FORMAT — STRICT RULES WITH EXAMPLES:
+
+PERSONAL BIO: Follow this exact pattern: Origin → Education → Family/Location.
+  GOOD: "Maria Elena Garcia was raised in San Antonio. She earned a bachelor's degree in criminal justice from the University of Texas at San Antonio and a law degree from St. Mary's University School of Law. She has three children."
+  BAD (too long, narrative, includes job info): "Maria Elena Garcia is a dedicated public servant who has spent decades fighting for justice in Bexar County. She was born and raised in San Antonio, Texas, where she developed a passion for law enforcement. She graduated from the University of Texas with a Bachelor of Arts in Criminal Justice..."
+  RULES: Full name on FIRST mention only. Lowercase degrees. Number of children, NOT names. 2-3 sentences max. No job descriptions — that's for professional bio.
+
+PROFESSIONAL BIO: Current job title ONLY. ONE sentence.
+  GOOD: "Maria is a prosecutor in the Bexar County District Attorney's Office."
+  BAD: "Maria has served as a prosecutor for over 15 years, handling complex felony cases and mentoring junior attorneys."
+  RULES: First name only. NO dates. NO descriptions of duties. NO past accomplishments. NO volunteer work. Just the current title and employer.
+
+POLITICAL BIO: Elected positions only, reverse chronological.
+  GOOD: "Maria ran for Bexar County district attorney in 2024 but did not win. She was elected to the San Antonio City Council District 5 seat in 2018."
+  BAD: "Maria is a well-known community leader who has been involved in local politics for many years. She serves on several boards and committees, and ran for District Attorney..."
+  RULES: First name only. Only ELECTED government positions. Reverse chronological. No appointed positions, board memberships, or community roles. If no elected positions, write "As of February 2026, [first name] has not held elected office."
+
+ADDITIONAL RULES:
 - Every claim needs a source with a "directQuote" that can be found with CMD+F on the source page.
 - Degrees lowercase: "law degree", "bachelor's degree in political science"
 - Family: number of children, not their names
-- Professional: current job first, no dates, no descriptions
-- Political: reverse chronological order`;
+- Keep each bio CONCISE — 1-3 sentences. Do NOT write essays or narratives.`;
 
   return provider.generateJSON<Pick<StagingDraft, 'name'> & { links: any[]; bios: any[] }>(prompt, {
-    systemPrompt: TEMPLATE_SYSTEM_PROMPT,
+    systemPrompt: getCustomPrompt('writer') ?? WRITER_SYSTEM_PROMPT,
     temperature: 0.3,
     maxTokens: 8192,
   });
@@ -174,7 +524,9 @@ async function generateIssueBatch(
   const fixInstructions = issueFeedback ? buildFixInstructions(issueFeedback) : '';
 
   const existingContext = existingIssues?.length
-    ? `\n\nEXISTING ISSUES TO REVISE:\n${JSON.stringify(existingIssues, null, 2)}`
+    ? `\n\nEXISTING ISSUES TO REVISE:\n${JSON.stringify(
+        stripFabricatedUrls({ issues: existingIssues }, input.criticFeedback).issues,
+        null, 2)}`
     : '';
 
   const issueList = issueKeys.map(k => `"${k}"`).join(', ');
@@ -182,7 +534,7 @@ async function generateIssueBatch(
   const prompt = `Generate ISSUE & STANCE entries for candidate "${input.candidateName}" for these categories: ${issueList}.
 
 SOURCE MATERIAL:
-${input.sourceContent}
+${prepareSourceContent(input.sourceContent, input.candidateName)}
 ${existingContext}
 ${fixInstructions}
 
@@ -218,7 +570,7 @@ RULES:
 - Use strictly nonpartisan language per the substitution chart`;
 
   return provider.generateJSON<any[]>(prompt, {
-    systemPrompt: TEMPLATE_SYSTEM_PROMPT,
+    systemPrompt: getCustomPrompt('writer') ?? WRITER_SYSTEM_PROMPT,
     temperature: 0.3,
     maxTokens: 8192,
   });
@@ -282,15 +634,30 @@ async function planIssueCategories(
   provider: AIProvider,
   input: WriterInput,
 ): Promise<string[]> {
+  // If source content is empty or just the "no material" sentinel, don't waste an API call
+  const trimmed = input.sourceContent.trim();
+  const isSourceless = !trimmed || trimmed === '(No source material found from web research)';
+  if (isSourceless) {
+    // Return a minimal set — Writer will mark all as "no public position"
+    return ['economy', 'public-safety', 'healthcare', 'education'];
+  }
+
   const prompt = `Given the following source material about "${input.candidateName}", list the issue categories that have relevant policy stances or positions. Only include categories where the source material contains actual policy positions or stances.
 
 SOURCE MATERIAL:
 ${input.sourceContent.slice(0, 6000)}
 
-Return a JSON array of issue category keys (lowercase, hyphenated). Choose from:
+Return a JSON array of issue category keys (lowercase, hyphenated). Choose from this list, ordered from MOST preferred to LEAST preferred:
 ["economy", "public-safety", "healthcare", "education", "environment", "immigration", "housing", "transportation", "gun-policy", "abortion", "civil-rights", "foreign-policy", "technology", "agriculture", "veterans", "criminal-justice", "consumer-protection", "government-reform", "labor", "social-services", "infrastructure", "legal-experience", "candidates-background"]
 
-Only include categories where the candidate has stated positions. Return the JSON array only.`;
+RULES:
+- Only include categories where the candidate has SPECIFIC stated positions in the source material.
+- Prefer categories higher in the list (economy, public-safety, healthcare, education) over generic ones.
+- AVOID "legal-experience" and "candidates-background" unless strongly supported — these are catch-all categories and should only be used when the source material explicitly discusses legal qualifications or personal background as a campaign issue.
+- Each category must have at least one concrete, sourceable policy stance.
+- Return 4-8 categories maximum.
+
+Return the JSON array only.`;
 
   try {
     const keys = await provider.generateJSON<string[]>(prompt, {
@@ -301,8 +668,8 @@ Only include categories where the candidate has stated positions. Return the JSO
       ? keys
       : ['economy', 'public-safety', 'healthcare', 'education'];
   } catch {
-    // Fallback — common categories
-    return ['economy', 'public-safety', 'healthcare', 'education', 'environment', 'gun-policy', 'abortion'];
+    // Fallback — common categories (minimal set)
+    return ['economy', 'public-safety', 'healthcare', 'education'];
   }
 }
 
@@ -352,7 +719,7 @@ RULES:
     updatedDraft: Partial<StagingDraft>;
     changes: Array<{ section: string; description: string }>;
   }>(prompt, {
-    systemPrompt: TEMPLATE_SYSTEM_PROMPT,
+    systemPrompt: getCustomPrompt('writer') ?? WRITER_SYSTEM_PROMPT,
     temperature: 0.2,
     maxTokens: 16384,
   });

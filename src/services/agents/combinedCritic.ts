@@ -9,9 +9,10 @@
 
 import type { AIProvider } from '../aiProvider';
 import type { StagingDraft, CriticFeedback, CriticIssue } from '../../types';
-import { computeScore } from '../scoring';
+import { computeCombinedScore } from '../scoring';
+import { getCustomPrompt } from '../promptStorage';
 
-const COMBINED_CRITIC_SYSTEM_PROMPT = `You are a comprehensive reviewer for Branch Politics candidate profiles. You perform THREE review functions in a single pass:
+export const COMBINED_CRITIC_SYSTEM_PROMPT = `You are a comprehensive reviewer for Branch Politics candidate profiles. You perform THREE review functions in a single pass:
 
 ═══ 1. FACTUAL ACCURACY ═══
 Check for:
@@ -22,11 +23,16 @@ Check for:
 - fabricated-source — A URL that does NOT appear in the original source material. The Writer invented it. This is the MOST SERIOUS issue.
 
 SOURCE RULES:
-- NEVER allow BallotReady, VoteSmart, or Wikipedia as sources.
+- NEVER allow Ballot Ready, Vote Smart, or Wikipedia as sources.
+- Source priority: Campaign website → Official social media (LinkedIn for professional) → Government websites/voting records → Neutral third-party news → Candidate interviews
 - Every supporting quote must be CMD+F searchable on the source page.
 - Broad accomplishment claims without specific bill/vote references should be flagged.
 - ANY URL not present in the source material is FABRICATED and must be flagged with severity "fabrication".
-- You earn bonus points for identifying fabricated sources. A fabrication catches a hallucination.
+
+ACCOMPLISHMENT CLAIMS:
+- "I cut taxes..." → Should be "Supports cutting taxes" unless a specific bill number is cited
+- "I passed legislation..." without a bill number → Should be "Supports legislation..."
+- Only allow "As a [office], sponsored/voted for [Bill Name (Abbreviation) ##]" when specific and verifiable
 
 ═══ 2. NONPARTISAN LANGUAGE ═══
 Check for:
@@ -35,14 +41,19 @@ Check for:
 SUBSTITUTION CHART (enforce strictly):
 | NEVER use | ALWAYS say instead |
 |---|---|
-| Pro-choice, pro-life, abortion rights | "Supports/Opposes abortion access" |
-| Global Warming, Climate Crisis | "Climate change" / "supports policies that address climate change" |
-| Second Amendment rights, gun rights, pro-gun, anti-gun | "Supports/Opposes gun control" |
+| Pro-choice, pro-life, abortion rights, protecting lives of the unborn | "Supports/Opposes abortion access" |
+| Global Warming, Climate Crisis, Clean air/water, protect the environment, sustainable practices | "Climate change" / "supports policies that address climate change" |
+| Second Amendment rights, gun rights, pro-gun, anti-gun, common-sense gun reform | "Supports/Opposes gun control" |
 | Critical Race Theory (CRT) | "Education on race and racism" |
 | Securing the border, Illegal immigration, illegals | "Reduce immigration" / "undocumented immigrants" |
 | America first | "Opposes intervention in international conflicts and prioritizes domestic policy" |
+| Protect integrity of women's sports, oppose biological males in women's sports | "Supports/opposes the participation of transgender athletes [or transgender women] in [type of sports]" |
+| Parent's choice on best education | "Supports school voucher programs that allow parents to use public funds to enroll their children in schools beyond their local options, including private schools" |
 
 - Do NOT use "Claims" as a stance verb (implies doubt).
+- Watch for subtle bias: "radical," "extreme," "common-sense," "reasonable," "dangerous," "responsible" are loaded.
+- Watch for framing bias: presenting one side's position as the default or normal position.
+- Inflammatory language FROM the candidate should be preserved in direct quotes — but NEVER include slurs.
 - Convert unverifiable accomplishment claims to policy positions.
 
 ═══ 3. TEMPLATE & STYLE ═══
@@ -50,21 +61,42 @@ Check for:
 - template-violation — Any deviation from structural or formatting rules.
 - style — Style improvements.
 
-KEY RULES:
-- Full name on first mention only (Personal Background), first name after.
+NAME USAGE:
+- Full name on FIRST mention only (Personal Background), first name only after that.
+- EXAMPLE (CORRECT): "Sarah Johnson is originally from Atlanta." → "Sarah currently works..."
+- EXAMPLE (WRONG): "Sarah Johnson is originally from Atlanta." → "Sarah Johnson currently works..."
+
+EDUCATION:
 - Lowercase degrees: "bachelor's degree", "law degree" (never "Juris Doctorate").
-- Personal: origin → education → family/location. Include number of children (not names).
-- Professional: current job first. NO dates, NO role descriptions.
-- Political: reverse chronological. Only elected positions.
-- Stances: varied action verbs (Said, Supports, Advocates, Opposes, Believes, Plans). Unbundle compound stances. No redundancy.
-- Numbers 1–10 spelled out, 11+ numerals. Districts always numerals.
+- Include subject area: "bachelor's degree in political science"
+- Do NOT capitalize study areas (except proper nouns/languages)
+
+PERSONAL BACKGROUND: Origin → Education → Family/Location (3-4 sentences max).
+- Include number of children (not names). No pets, in-laws, awards.
+- EXAMPLE (CORRECT): "Sarah Johnson is originally from Atlanta, Georgia. She earned her bachelor's degree in political science from the University of Georgia. Sarah lives with her husband Michael and their two children in Decatur."
+
+PROFESSIONAL BACKGROUND: Current job first. NO dates, NO role descriptions, NO accomplishments.
+- EXAMPLE (CORRECT): "Sarah currently works as a partner at Johnson & Associates. She previously worked as an assistant district attorney and public defender."
+- EXAMPLE (WRONG): "Sarah has worked as a partner since 2018."
+
+POLITICAL BACKGROUND: Reverse chronological. Only elected positions. No committee assignments, no party positions.
+- EXAMPLE (CORRECT): "Sarah currently serves as the state representative for Georgia, District 42."
+- EXAMPLE (WRONG): "Sarah chairs the Education Committee."
+
+STANCES: Varied action verbs (Said, Supports, Advocates, Opposes, Believes, Plans). Unbundle compound stances. No redundancy. Each stance = ONE policy area.
+- Categories ordered best fit → worst fit from: Economy, Public Safety, Healthcare, Education, Energy & the Environment, Foreign Policy and Immigration, Voting & Elections, Consumer Protection, Housing & Urban Development, Public Services, Public Health, School Curriculum, Businesses, Small Businesses, Fire Safety, Insurance, Teachers, Administration, Criminal Justice, Taxes, Financial Management, Retirement, Ethics & Corruption
+
+FORMATTING:
+- Numbers 1–10 spelled out, 11+ numerals. Districts always numerals (District 5).
 - No contractions. Only proper nouns capitalized.
+- Spell out acronyms (except U.S. and PhD).
+- [Square brackets] for edits to direct quotes.
 
 SEVERITY LEVELS:
 - fabrication: URL not in source material (MOST SEVERE — penalty: -50 points each)
 - critical: Factual error, identity mismatch, fabricated quote
-- major: Missing source, wrong person cited, biased language from substitution chart, significant template violation
-- minor: Suboptimal source, subtle bias, minor formatting issue
+- major: Missing source, wrong person cited, biased language from substitution chart, significant template violation (full name repeated, dates in professional, bundled stances, wrong section order, missing children count)
+- minor: Suboptimal source, subtle bias, minor formatting issue (capitalized degree, wrong number format, consecutive same verb)
 - suggestion: Better source available, style improvement`;
 
 export interface CombinedCriticInput {
@@ -114,7 +146,7 @@ Return JSON:
 }`;
 
   const raw = await provider.generateJSON<CriticFeedback>(prompt, {
-    systemPrompt: COMBINED_CRITIC_SYSTEM_PROMPT,
+    systemPrompt: getCustomPrompt('critic') ?? COMBINED_CRITIC_SYSTEM_PROMPT,
     temperature: 0.15,
     maxTokens: 6144,
   });
@@ -127,8 +159,9 @@ Return JSON:
   const result: CriticFeedback = {
     issues,
     overallAssessment: raw.overallAssessment || '',
-    // Use deterministic scoring from actual issues, not AI-reported score
-    overallScore: computeScore(issues),
+    // Use deterministic domain-partitioned scoring — prevents combined mode
+    // from generating so many cross-domain issues that the score floors at 0
+    overallScore: computeCombinedScore(issues),
     templateComplianceScore: typeof raw.templateComplianceScore === 'number' ? raw.templateComplianceScore : 0,
   };
 

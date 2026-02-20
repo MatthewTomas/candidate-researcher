@@ -72,7 +72,10 @@ async function withAgentRetry<T>(
       const isRetryable = lower.includes('json') || lower.includes('parse') ||
         lower.includes('429') || lower.includes('quota') || lower.includes('rate limit') ||
         lower.includes('fetch') || lower.includes('network') || lower.includes('timeout') ||
-        lower.includes('unexpected token');
+        lower.includes('unexpected token') ||
+        lower.includes('503') || lower.includes('unavailable') || lower.includes('overloaded') ||
+        lower.includes('500') || lower.includes('internal server error') ||
+        lower.includes('high demand');
 
       if (!isRetryable || attempt >= AGENT_RETRY_CONFIG.maxAttempts) {
         throw err;

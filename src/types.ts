@@ -12,6 +12,10 @@ export interface Source {
   _id?: string;
   /** Whether the source URL is behind a paywall */
   paywalled?: boolean;
+  /** Source verification confidence (0–1). Set by source verifier. */
+  confidence?: number;
+  /** Explanation for low confidence */
+  confidenceReason?: string;
 }
 
 export interface ReferenceCategory {
@@ -60,6 +64,9 @@ export interface Bio {
   missingData?: string;
   /** Source verification status — set by provenance/URL checks */
   sourceVerified?: 'verified' | 'unverifiable' | 'fabricated' | 'not-in-input';
+  /** Rolled-up confidence (min of sources' confidence). Set by source verifier. */
+  confidence?: number;
+  confidenceReason?: string;
   autoSummary?: AutoSummary;
   _id?: string;
 }
@@ -82,6 +89,9 @@ export interface Stance {
   directQuote?: string;
   /** Source verification status — set by provenance/URL checks */
   sourceVerified?: 'verified' | 'unverifiable' | 'fabricated' | 'not-in-input';
+  /** Rolled-up confidence (min of sources' confidence). Set by source verifier. */
+  confidence?: number;
+  confidenceReason?: string;
   issuesSecondary: string[];
   textApproved: boolean;
   editsMade: boolean;
@@ -119,6 +129,8 @@ export interface StagingDraft {
   synced: boolean;
   version: number;
   metadata?: Record<string, unknown>;
+  /** Flag set when profile was generated with insufficient source material */
+  dataWarning?: 'insufficient-sources';
 }
 
 // ============================================================================
@@ -614,12 +626,20 @@ export interface AppSettings {
   criticRunCounts?: CriticRunCounts;
   /** Pipeline mode — controls call count / quality tradeoff */
   pipelineMode?: PipelineMode;
+  /** Skip critic review entirely */
+  skipCritics?: boolean;
   /** Critic approach — 3 specialized agents or 1 combined (auto-set by pipeline mode) */
   criticMode?: CriticMode;
   /** Audit approach — multi-verifier, single, or skip */
   auditMode?: AuditMode;
   /** Gemini billing tier — determines rate limits and real costs */
   geminiTier?: GeminiTier;
+  /** Web search provider for the research phase */
+  searchProvider?: 'duckduckgo' | 'google-cse';
+  /** Google Custom Search API key (encrypted alongside LLM keys) */
+  googleSearchApiKey?: string;
+  /** Google Custom Search engine ID (cx param) */
+  googleSearchEngineId?: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -643,9 +663,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   criticParallelism: 'parallel',
   criticRunCounts: { factChecker: 1, languageReviewer: 1, styleAuditor: 1 },
   pipelineMode: 'balanced',
-  criticMode: 'combined',
+  criticMode: 'specialized',
   auditMode: 'single-verifier',
   geminiTier: 'free',
+  searchProvider: 'duckduckgo',
 };
 
 // ============================================================================
@@ -670,7 +691,7 @@ export interface CandidateSession {
   extractedProfile: ExtractedProfile | null;
   additionalSources: AdditionalSource[];
   candidateLinks?: CandidateLinks;
-  status: 'importing' | 'building' | 'ready-for-audit' | 'audited' | 'complete';
+  status: 'importing' | 'building' | 'complete';
   /** Activity log from the build process — persisted across navigation */
   buildLog?: string[];
   /** Source provenance check results — deterministic URL verification */
@@ -706,7 +727,7 @@ export interface CandidateMetadata {
 // Batch Queue Types
 // ============================================================================
 
-export type BatchItemStatus = 'queued' | 'importing' | 'building' | 'auditing' | 'complete' | 'error' | 'skipped' | 'paused';
+export type BatchItemStatus = 'queued' | 'importing' | 'researching' | 'building' | 'auditing' | 'complete' | 'error' | 'skipped' | 'paused';
 
 export interface BatchQueueItem {
   id: string;
@@ -720,6 +741,8 @@ export interface BatchQueueItem {
   extractedProfile?: ExtractedProfile | null; // parsed from HTML import
   startedAt?: string;
   completedAt?: string;
+  /** User-provided source URLs to seed the research phase */
+  sourceUrls?: string[];
 }
 
 export interface BatchQueue {

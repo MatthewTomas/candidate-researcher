@@ -17,7 +17,16 @@ const MONTH_KEY = 'branch-playground-cost-month';
 
 function getModelInfo(provider: AIProviderType, modelId: string) {
   const providerConfig = AI_PROVIDERS[provider];
-  return providerConfig?.models.find(m => m.id === modelId) ?? null;
+  const model = providerConfig?.models.find(m => m.id === modelId) ?? null;
+
+  // Safety fallback: if gemini-free model has no pricing, try gemini-paid
+  // This handles records logged before the tier-resolution fix was added
+  if (model && !model.costPerMillionTokens && provider === 'gemini-free') {
+    const paidModel = AI_PROVIDERS['gemini-paid']?.models.find(m => m.id === modelId);
+    if (paidModel?.costPerMillionTokens) return paidModel;
+  }
+
+  return model;
 }
 
 /** Compute cost in USD from token counts */

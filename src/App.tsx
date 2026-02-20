@@ -1,26 +1,18 @@
 import React, { Suspense } from 'react';
-import { Routes, Route, Navigate, NavLink, useLocation } from 'react-router-dom';
+import { Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import { AppProvider, useApp } from './context/AppContext';
 import { Toast, Spinner } from './components/shared';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { UnlockGate } from './components/UnlockGate';
 
 // Lazy-loaded pages
-const CandidatesPage = React.lazy(() => import('./pages/CandidatesPage'));
-const BuildPage = React.lazy(() => import('./pages/BuildPage'));
-const AuditPage = React.lazy(() => import('./pages/AuditPage'));
-const HistoryPage = React.lazy(() => import('./pages/HistoryPage'));
+const WorkspacePage = React.lazy(() => import('./pages/WorkspacePage'));
 const SettingsPage = React.lazy(() => import('./pages/SettingsPage'));
 
 /* ─── Nav icon SVGs ────────────────────────────────── */
-const QueueIcon = () => (
+const WorkspaceIcon = () => (
   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-  </svg>
-);
-const HistoryIcon = () => (
-  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
   </svg>
 );
 const SettingsIcon = () => (
@@ -31,14 +23,14 @@ const SettingsIcon = () => (
 );
 
 const NAV_ITEMS = [
-  { to: '/candidates', label: 'Queue', icon: <QueueIcon /> },
-  { to: '/history', label: 'History', icon: <HistoryIcon /> },
+  { to: '/', label: 'Workspace', icon: <WorkspaceIcon /> },
   { to: '/settings', label: 'Settings', icon: <SettingsIcon /> },
 ];
 
 function AppShell() {
-  const { toast, dismissToast, activeSession, isUnlocked, lockVault, needsEncryptionSetup } = useApp();
+  const { toast, dismissToast, isUnlocked, lockVault, needsEncryptionSetup } = useApp();
   const location = useLocation();
+  const isWorkspace = location.pathname !== '/settings';
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -53,7 +45,7 @@ function AppShell() {
               </div>
               <div>
                 <h1 className="text-base font-bold text-gray-900 leading-tight">Branch Playground</h1>
-                <p className="text-[10px] text-gray-400 leading-none">Profile Builder & Fact Checker</p>
+                <p className="text-xs text-gray-400 leading-none">Profile Builder & Fact Checker</p>
               </div>
             </div>
 
@@ -63,6 +55,7 @@ function AppShell() {
                 <NavLink
                   key={item.to}
                   to={item.to}
+                  end={item.to === '/'}
                   aria-label={item.label}
                   className={({ isActive }) =>
                     `flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors
@@ -95,25 +88,20 @@ function AppShell() {
       </header>
 
       {/* Main content */}
-      <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6">
-        <UnlockGate>
+      <main className={isWorkspace
+        ? 'flex-1 flex flex-col overflow-hidden px-4 sm:px-6 lg:px-8'
+        : 'flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6'
+      }>
           <Suspense fallback={
             <div className="flex items-center justify-center py-32">
               <Spinner size="lg" />
             </div>
           }>
             <Routes>
-              <Route path="/" element={<Navigate to="/candidates" replace />} />
-              <Route path="/candidates" element={<CandidatesPage />} />
-              <Route path="/import" element={<Navigate to="/candidates" replace />} />
-              <Route path="/batch" element={<Navigate to="/candidates" replace />} />
-              <Route path="/build" element={<BuildPage />} />
-              <Route path="/audit" element={<AuditPage />} />
-              <Route path="/history" element={<HistoryPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/settings" element={<UnlockGate><SettingsPage /></UnlockGate>} />
+              <Route path="/*" element={<WorkspacePage />} />
             </Routes>
           </Suspense>
-        </UnlockGate>
       </main>
 
       {/* Toast notification */}

@@ -44,7 +44,7 @@ export function ErrorBanner({ title, message, details, onDismiss, actions }: {
                 {showDetails ? 'Hide details ▲' : 'Show details ▼'}
               </button>
               {showDetails && (
-                <pre className="mt-1 text-[11px] text-red-600/80 bg-red-100 rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-32 overflow-y-auto">
+                <pre className="mt-1 text-sm text-red-600/80 bg-red-100 rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-32 overflow-y-auto">
                   {details}
                 </pre>
               )}

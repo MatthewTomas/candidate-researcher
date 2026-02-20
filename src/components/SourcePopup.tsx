@@ -80,7 +80,7 @@ export default function SourcePopup({ source, onClose }: SourcePopupProps) {
         <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-gray-800">Source</span>
-            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${
+            <span className={`text-xs font-medium px-1.5 py-0.5 rounded border ${
               source.sourceType === 'website' ? 'bg-blue-50 text-blue-600 border-blue-200' :
               source.sourceType === 'news' ? 'bg-purple-50 text-purple-600 border-purple-200' :
               source.sourceType === 'social' ? 'bg-pink-50 text-pink-600 border-pink-200' :
@@ -104,7 +104,7 @@ export default function SourcePopup({ source, onClose }: SourcePopupProps) {
         <div className="p-5 space-y-4">
           {/* URL */}
           <div>
-            <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Source URL</div>
+            <div className="text-xs uppercase tracking-wider text-gray-400 font-semibold mb-1">Source URL</div>
             <a
               href={source.url}
               target="_blank"
@@ -118,7 +118,7 @@ export default function SourcePopup({ source, onClose }: SourcePopupProps) {
           {/* Title */}
           {source.title && (
             <div>
-              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">Title</div>
+              <div className="text-xs uppercase tracking-wider text-gray-400 font-semibold mb-1">Title</div>
               <p className="text-sm text-gray-700">{source.title}</p>
             </div>
           )}
@@ -126,13 +126,13 @@ export default function SourcePopup({ source, onClose }: SourcePopupProps) {
           {/* Direct Quote */}
           {hasQuote && (
             <div>
-              <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-1">
+              <div className="text-xs uppercase tracking-wider text-gray-400 font-semibold mb-1">
                 Supporting Quote
               </div>
               <blockquote className="border-l-3 border-branch-300 bg-branch-50/50 rounded-r-lg px-4 py-3 text-sm text-gray-700 leading-relaxed italic">
                 &ldquo;{source.directQuote}&rdquo;
               </blockquote>
-              <p className="text-[10px] text-gray-400 mt-1.5">
+              <p className="text-xs text-gray-400 mt-1.5">
                 This quote should be searchable with CMD+F / Ctrl+F on the source page.
               </p>
             </div>

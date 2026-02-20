@@ -37,6 +37,29 @@ function getEnvApiKeys(): Partial<Record<AIProviderType, string>> {
   return keys;
 }
 
+/**
+ * Merge service-level secret keys into the encrypted blob alongside provider API keys.
+ * Uses a `_svc:` prefix to separate them from provider keys.
+ */
+function mergeServiceKeys(apiKeys: Record<string, string>, settings: AppSettings): Record<string, string> {
+  const merged = { ...apiKeys };
+  if (settings.googleSearchApiKey) merged['_svc:googleSearchApiKey'] = settings.googleSearchApiKey;
+  return merged;
+}
+
+/**
+ * Split service keys back out of the decrypted blob.
+ */
+function splitServiceKeys(blob: Record<string, string>): { apiKeys: Record<string, string>; googleSearchApiKey?: string } {
+  const apiKeys: Record<string, string> = {};
+  let googleSearchApiKey: string | undefined;
+  for (const [k, v] of Object.entries(blob)) {
+    if (k === '_svc:googleSearchApiKey') googleSearchApiKey = v;
+    else apiKeys[k] = v;
+  }
+  return { apiKeys, googleSearchApiKey };
+}
+
 interface AppContextValue {
   // Settings
   settings: AppSettings;
@@ -147,7 +170,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (sessionPw) {
         // Auto-unlock with session-stored password
         loadDecryptedKeys(sessionPw).then(keys => {
-          setSettings(prev => ({ ...prev, apiKeys: { ...prev.apiKeys, ...keys } }));
+          const { apiKeys: providerKeys, googleSearchApiKey } = splitServiceKeys(keys);
+          setSettings(prev => ({
+            ...prev,
+            apiKeys: { ...prev.apiKeys, ...providerKeys },
+            ...(googleSearchApiKey ? { googleSearchApiKey } : {}),
+          }));
           setIsUnlocked(true);
         }).catch(() => {
           // Stored password is invalid (shouldn't happen, but handle it)
@@ -175,6 +203,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (patch.geminiTier !== undefined) {
         rateLimiter.setGeminiTier(patch.geminiTier);
       }
+      // Re-encrypt if googleSearchApiKey changed
+      if (patch.googleSearchApiKey !== undefined) {
+        const pw = getStoredPassword();
+        if (pw) {
+          saveEncryptedKeys(mergeServiceKeys(next.apiKeys, next), pw).catch(() => {});
+        }
+      }
       return next;
     });
   }, []);
@@ -194,7 +229,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Save encrypted keys if we have a password
       const pw = getStoredPassword();
       if (pw) {
-        saveEncryptedKeys(next.apiKeys, pw).catch(() => {
+        saveEncryptedKeys(mergeServiceKeys(next.apiKeys, next), pw).catch(() => {
           // Fall back to plain-text if encryption fails
           saveSettings(next);
         });
@@ -235,13 +270,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setBatchQueue([]);
     saveBatchQueue([]);
   }, []);
-
-  // Persist queue on external setBatchQueue calls
-  useEffect(() => {
-    // This effect syncs queue changes from setBatchQueue calls
-    // that don't go through add/remove/update helpers
-    saveBatchQueue(batchQueue);
-  }, [batchQueue]);
 
   const createSession = useCallback((candidateName: string): CandidateSession => {
     const session: CandidateSession = {
@@ -361,16 +389,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     storePassword(password);
     const keys = await loadDecryptedKeys(password);
-    setSettings(prev => ({ ...prev, apiKeys: { ...prev.apiKeys, ...keys } }));
+    const { apiKeys: providerKeys, googleSearchApiKey } = splitServiceKeys(keys);
+    setSettings(prev => ({
+      ...prev,
+      apiKeys: { ...prev.apiKeys, ...providerKeys },
+      ...(googleSearchApiKey ? { googleSearchApiKey } : {}),
+    }));
     setIsUnlocked(true);
     setNeedsUnlock(false);
     return true;
   }, []);
 
   const setupEncryption = useCallback(async (password: string): Promise<void> => {
-    // Encrypt current plain-text keys
-    const currentKeys = settings.apiKeys;
-    await saveEncryptedKeys(currentKeys, password);
+    // Encrypt current plain-text keys + service keys
+    const allKeys = mergeServiceKeys(settings.apiKeys, settings);
+    await saveEncryptedKeys(allKeys, password);
     storePassword(password);
     setIsUnlocked(true);
     setNeedsEncryptionSetup(false);

@@ -54,36 +54,36 @@ export default function CostDashboard() {
   return (
     <div className="space-y-4">
       {/* Month selector + top stats */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div className="shrink-0">
           <input
             type="month"
             className="text-xs border border-gray-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-branch-500"
             value={month}
             onChange={e => setMonth(e.target.value)}
           />
-          <div className="flex items-center gap-4 text-xs">
-            <div>
-              <span className="text-gray-500">Total Spend:</span>{' '}
-              <span className="font-bold text-gray-900">{formatUsd(summary.totalCostUsd)}</span>
-            </div>
-            <div>
-              <span className="text-gray-500">Calls:</span>{' '}
-              <span className="font-medium text-gray-700">{summary.totalCalls}</span>
-            </div>
-            <div>
-              <span className="text-gray-500">Tokens:</span>{' '}
-              <span className="font-medium text-gray-700">
-                {formatNumber(summary.totalPromptTokens + summary.totalCompletionTokens)}
-              </span>
-            </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs min-w-0">
+          <div className="whitespace-nowrap">
+            <span className="text-gray-500">Total{'\u00A0'}Spend:</span>{' '}
+            <span className="font-bold text-gray-900">{formatUsd(summary.totalCostUsd)}</span>
+          </div>
+          <div className="whitespace-nowrap">
+            <span className="text-gray-500">Calls:</span>{' '}
+            <span className="font-medium text-gray-700">{summary.totalCalls}</span>
+          </div>
+          <div className="whitespace-nowrap">
+            <span className="text-gray-500">Tokens:</span>{' '}
+            <span className="font-medium text-gray-700">
+              {formatNumber(summary.totalPromptTokens + summary.totalCompletionTokens)}
+            </span>
           </div>
         </div>
         <button
-          className="text-[10px] text-red-400 hover:text-red-600"
+          className="text-xs text-red-400 hover:text-red-600 ml-auto shrink-0"
           onClick={() => setShowClearConfirm(true)}
         >
-          Clear Log
+          Clear
         </button>
       </div>
 
@@ -150,7 +150,7 @@ function OverviewTab({ summary }: { summary: CostSummary }) {
                 />
               </div>
               <span className="text-xs font-mono text-gray-600 w-16 text-right">{formatUsd(data.costUsd)}</span>
-              <span className="text-[10px] text-gray-400 w-12 text-right">{data.calls} calls</span>
+              <span className="text-xs text-gray-400 w-12 text-right">{data.calls} calls</span>
             </div>
           ))}
         </div>
@@ -159,11 +159,11 @@ function OverviewTab({ summary }: { summary: CostSummary }) {
       {/* Token breakdown */}
       <div className="grid grid-cols-2 gap-3 pt-3 border-t border-gray-100">
         <div className="bg-gray-50 rounded-lg p-3">
-          <div className="text-[10px] text-gray-500 uppercase tracking-wider">Input Tokens</div>
+          <div className="text-xs text-gray-500 uppercase tracking-wider">Input Tokens</div>
           <div className="text-sm font-bold text-gray-800 mt-0.5">{formatNumber(summary.totalPromptTokens)}</div>
         </div>
         <div className="bg-gray-50 rounded-lg p-3">
-          <div className="text-[10px] text-gray-500 uppercase tracking-wider">Output Tokens</div>
+          <div className="text-xs text-gray-500 uppercase tracking-wider">Output Tokens</div>
           <div className="text-sm font-bold text-gray-800 mt-0.5">{formatNumber(summary.totalCompletionTokens)}</div>
         </div>
       </div>
@@ -234,11 +234,11 @@ function SessionsTab({ summary }: { summary: CostSummary }) {
         <div key={sessionId} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
           <div>
             <span className="text-xs font-semibold text-gray-800">{data.candidateName}</span>
-            <span className="text-[10px] text-gray-400 ml-2">{sessionId.slice(0, 8)}</span>
+            <span className="text-xs text-gray-400 ml-2">{sessionId.slice(0, 8)}</span>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs font-medium">{formatUsd(data.costUsd)}</span>
-            <span className="text-[10px] text-gray-400">{data.calls} calls</span>
+            <span className="text-xs text-gray-400">{data.calls} calls</span>
           </div>
         </div>
       ))}
@@ -255,11 +255,11 @@ function LogTab({ calls }: { calls: APICallRecord[] }) {
 
   return (
     <div className="space-y-1 max-h-[50vh] overflow-y-auto">
-      <div className="text-[10px] text-gray-400 mb-2">Showing last {calls.length} calls (newest first)</div>
+      <div className="text-xs text-gray-400 mb-2">Showing last {calls.length} calls (newest first)</div>
       {calls.map(call => (
         <div
           key={call.id}
-          className={`flex items-center gap-2 px-2 py-1.5 rounded text-[10px] ${
+          className={`flex items-center gap-2 px-2 py-1.5 rounded text-xs ${
             call.success ? 'bg-white' : 'bg-red-50'
           }`}
         >

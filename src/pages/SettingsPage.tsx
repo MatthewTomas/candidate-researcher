@@ -2,19 +2,22 @@ import React, { useState, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   AI_PROVIDERS,
-  PIPELINE_MODE_INFO,
+  GEMINI_TIER_INFO,
   type AIProviderType,
   type AppSettings,
   type CriticRunCounts,
   type CriticParallelism,
-  type PipelineMode,
-  type CriticMode,
-  type AuditMode,
+  type GeminiTier,
 } from '../types';
 import { Spinner, StatusBadge, ConfirmDialog } from '../components/shared';
 import { ModelPicker, CostBadge } from '../components/ModelPicker';
 import CostCalculator from '../components/CostCalculator';
 import CostDashboard from '../components/CostDashboard';
+import { getCustomPrompt, saveCustomPrompt, clearCustomPrompt } from '../services/promptStorage';
+import { WRITER_SYSTEM_PROMPT } from '../services/agents/writer';
+import { FACT_CHECKER_SYSTEM_PROMPT } from '../services/agents/factChecker';
+import { LANGUAGE_REVIEWER_SYSTEM_PROMPT } from '../services/agents/languageReviewer';
+import { STYLE_AUDITOR_SYSTEM_PROMPT } from '../services/agents/styleAuditor';
 
 // ── All providers, alphabetized. Gemini appears once (gemini-paid hidden). ──
 const PROVIDER_ENTRIES = Object.entries(AI_PROVIDERS) as [AIProviderType, typeof AI_PROVIDERS[AIProviderType]][];
@@ -29,14 +32,13 @@ const ALL_PROVIDERS = PROVIDER_ENTRIES
   .sort((a, b) => a.sortName.localeCompare(b.sortName));
 
 const ROLES = [
-  { key: 'writer', label: 'Writer Agent', desc: 'Generates the candidate profile' },
-  { key: 'extractor', label: 'Claim Extractor', desc: 'Extracts verifiable claims' },
+  { key: 'writer', label: 'Writer Agent', desc: 'Generates the candidate profile', promptRole: 'writer' as PromptRole, promptDefault: WRITER_SYSTEM_PROMPT },
 ] as const;
 
 const CRITIC_AGENTS = [
-  { key: 'factChecker', label: 'Fact Checker', emoji: '🔬', desc: 'Verifies factual accuracy, sources, identity matching, and unsupported claims', rcKey: 'factChecker' as keyof CriticRunCounts },
-  { key: 'languageReviewer', label: 'Language Reviewer', emoji: '📝', desc: 'Checks for biased and partisan language using the substitution chart', rcKey: 'languageReviewer' as keyof CriticRunCounts },
-  { key: 'styleAuditor', label: 'Style & Template Auditor', emoji: '📐', desc: 'Enforces formatting rules — name usage, degree casing, stance unbundling, etc.', rcKey: 'styleAuditor' as keyof CriticRunCounts },
+  { key: 'factChecker', label: 'Fact Checker', emoji: '🔬', desc: 'Verifies factual accuracy, sources, identity matching, and unsupported claims', rcKey: 'factChecker' as keyof CriticRunCounts, promptRole: 'fact-checker' as PromptRole, promptDefault: FACT_CHECKER_SYSTEM_PROMPT },
+  { key: 'languageReviewer', label: 'Language Reviewer', emoji: '📝', desc: 'Checks for biased and partisan language using the substitution chart', rcKey: 'languageReviewer' as keyof CriticRunCounts, promptRole: 'language-reviewer' as PromptRole, promptDefault: LANGUAGE_REVIEWER_SYSTEM_PROMPT },
+  { key: 'styleAuditor', label: 'Style & Template Auditor', emoji: '📐', desc: 'Enforces formatting rules — name usage, degree casing, stance unbundling, etc.', rcKey: 'styleAuditor' as keyof CriticRunCounts, promptRole: 'style-auditor' as PromptRole, promptDefault: STYLE_AUDITOR_SYSTEM_PROMPT },
 ] as const;
 
 const TOC = [
@@ -70,7 +72,7 @@ function CollapsibleSection({
           <div className="flex items-center gap-2">
             <h3 className="text-base font-semibold text-gray-800">{title}</h3>
             {badge && (
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${badgeColor || 'bg-gray-100 text-gray-600'}`}>
+              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${badgeColor || 'bg-gray-100 text-gray-600'}`}>
                 {badge}
               </span>
             )}
@@ -111,11 +113,11 @@ function SubCollapsible({
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm font-medium text-gray-700">{title}</span>
           {badge && (
-            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${badgeColor || 'bg-gray-100 text-gray-600'}`}>
+            <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${badgeColor || 'bg-gray-100 text-gray-600'}`}>
               {badge}
             </span>
           )}
-          {subtitle && <span className="text-[10px] text-gray-400 truncate hidden sm:inline">{subtitle}</span>}
+          {subtitle && <span className="text-xs text-gray-400 truncate hidden sm:inline">{subtitle}</span>}
         </div>
         <svg
           className={`h-4 w-4 text-gray-300 transition-transform flex-shrink-0 ml-2 ${open ? 'rotate-180' : ''}`}
@@ -143,6 +145,75 @@ function EyeIcon({ open }: { open: boolean }) {
   );
 }
 
+/* ═══════════════════════════ PromptEditor ════════════════════════════════ */
+type PromptRole = 'writer' | 'critic' | 'fact-checker' | 'language-reviewer' | 'style-auditor';
+
+function PromptEditor({ role, label, emoji, defaultPrompt }: {
+  role: PromptRole;
+  label: string;
+  emoji: string;
+  defaultPrompt: string;
+}) {
+  const saved = getCustomPrompt(role);
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState(saved ?? defaultPrompt);
+  const [dirty, setDirty] = useState(false);
+  const isCustom = saved !== null;
+
+  const handleChange = (v: string) => { setText(v); setDirty(v !== (saved ?? defaultPrompt)); };
+  const handleSave = () => { saveCustomPrompt(role, text); setDirty(false); };
+  const handleRestore = () => { clearCustomPrompt(role); setText(defaultPrompt); setDirty(false); };
+
+  return (
+    <div className="border border-gray-200 rounded-lg overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-3 py-2.5 bg-white hover:bg-gray-50 transition-colors text-left"
+      >
+        <div className="flex items-center gap-2">
+          <span>{emoji}</span>
+          <span className="text-xs font-semibold text-gray-700">{label}</span>
+          {isCustom && (
+            <span className="text-sm font-bold px-1.5 py-0.5 rounded-full bg-branch-100 text-branch-700">CUSTOM</span>
+          )}
+        </div>
+        <svg className={`h-4 w-4 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <div className="border-t border-gray-100 p-3 space-y-2 bg-gray-50/40">
+          <textarea
+            rows={10}
+            className="w-full text-sm font-mono border border-gray-200 rounded-lg p-2 bg-white resize-y focus:outline-none focus:ring-2 focus:ring-branch-400"
+            value={text}
+            onChange={e => handleChange(e.target.value)}
+          />
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={handleRestore}
+              disabled={!isCustom}
+              className="text-sm text-gray-400 hover:text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Restore Default
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={!dirty}
+              className="text-sm font-semibold px-3 py-1.5 rounded-lg bg-branch-600 text-white hover:bg-branch-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Save Prompt
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ═══════════════════════════ MAIN PAGE ═══════════════════════════════════ */
 export default function SettingsPage() {
   const { settings, updateSettings, setApiKey, sessions, removeSession, showToast, clearAllApiKeys } = useApp();
@@ -151,6 +222,10 @@ export default function SettingsPage() {
   const [deletingSession, setDeletingSession] = useState<string | null>(null);
   const [showKeyValues, setShowKeyValues] = useState<Record<string, boolean>>({});
   const [confirmClearKeys, setConfirmClearKeys] = useState(false);
+  const [showGoogleKey, setShowGoogleKey] = useState(false);
+  const [showGoogleCx, setShowGoogleCx] = useState(false);
+  const [testingGoogle, setTestingGoogle] = useState(false);
+  const [googleTestResult, setGoogleTestResult] = useState<'success' | 'error' | null>(null);
 
   // ── Test API key ──
   const handleTest = useCallback(async (providerType: AIProviderType) => {
@@ -175,6 +250,33 @@ export default function SettingsPage() {
       setTestingProvider(null);
     }
   }, [settings.apiKeys, showToast]);
+
+  // ── Test Google CSE ──
+  const handleTestGoogle = useCallback(async () => {
+    const key = settings.googleSearchApiKey;
+    const cx = settings.googleSearchEngineId;
+    if (!key || !cx) { showToast('Enter both API key and Search Engine ID first', 'error'); return; }
+    setTestingGoogle(true);
+    setGoogleTestResult(null);
+    try {
+      const url = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(key)}&cx=${encodeURIComponent(cx)}&q=test&num=1`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const msg = body?.error?.message || `HTTP ${res.status}`;
+        setGoogleTestResult('error');
+        showToast(`Google CSE: ${msg}`, 'error');
+        return;
+      }
+      setGoogleTestResult('success');
+      showToast('Google Custom Search connected!', 'success');
+    } catch (err: any) {
+      setGoogleTestResult('error');
+      showToast(`Google CSE: ${err.message}`, 'error');
+    } finally {
+      setTestingGoogle(false);
+    }
+  }, [settings.googleSearchApiKey, settings.googleSearchEngineId, showToast]);
 
   // ── Role helpers ──
   const setRole = (role: string, provider: AIProviderType, model?: string) => {
@@ -203,7 +305,9 @@ export default function SettingsPage() {
   ).length;
 
   return (
-    <div className="space-y-4 max-w-3xl">
+    <div className="flex gap-6 max-w-6xl">
+      {/* ═══ LEFT COLUMN — scrollable settings ═══ */}
+      <div className="flex-1 min-w-0 space-y-4">
       {/* ── Header ── */}
       <div>
         <h2 className="text-xl font-bold text-gray-900">Settings</h2>
@@ -267,7 +371,7 @@ export default function SettingsPage() {
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-medium text-gray-600">API Key</span>
-                  <span className="text-[10px] text-gray-400">(shared between Free & Paid tiers)</span>
+                  <span className="text-xs text-gray-400">(shared between Free & Paid tiers)</span>
                 </div>
                 <div className="flex items-end gap-2">
                   <div className="flex-1 relative">
@@ -275,6 +379,9 @@ export default function SettingsPage() {
                       type={showKeyValues['gemini'] ? 'text' : 'password'}
                       className="input text-sm font-mono pr-8"
                       placeholder="Enter Google AI Studio API key…"
+                      autoComplete="off"
+                      data-1p-ignore
+                      data-lpignore="true"
                       value={geminiKey}
                       onChange={e => setApiKey('gemini-free', e.target.value)}
                       onPaste={e => { e.stopPropagation(); const t = e.clipboardData.getData('text/plain'); if (t) { e.preventDefault(); setApiKey('gemini-free', t); } }}
@@ -288,7 +395,7 @@ export default function SettingsPage() {
                   </button>
                   {testResults['gemini-free'] && <StatusBadge status={testResults['gemini-free'] === 'success' ? 'verified' : 'error'} />}
                 </div>
-                <div className="flex items-center justify-between text-[10px]">
+                <div className="flex items-center justify-between text-xs">
                   <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-branch-600 hover:underline font-medium">Get API key →</a>
                   <span className="text-gray-400">One key works for both Free and Paid tiers.</span>
                 </div>
@@ -299,7 +406,7 @@ export default function SettingsPage() {
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
                   <div className="flex items-start gap-2">
                     <span className="text-amber-500 text-sm mt-0.5">ℹ️</span>
-                    <div className="text-[11px] text-amber-800 space-y-1">
+                    <div className="text-sm text-amber-800 space-y-1">
                       <p className="font-semibold">Rate limits are determined by your Google AI Studio billing setup.</p>
                       <p>The app automatically handles rate limiting. If you hit rate limits, requests are queued and retried with backoff.</p>
                       <p className="mt-1">
@@ -312,28 +419,61 @@ export default function SettingsPage() {
                 </div>
               </div>
 
+              {/* Gemini Tier selector */}
+              <div className="space-y-2 border-t border-gray-100 pt-3">
+                <label className="text-xs font-semibold text-gray-600">Your Gemini Billing Tier</label>
+                <p className="text-xs text-gray-400">Select the tier matching your Google AI Studio billing setup. This controls cost tracking accuracy.</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {(Object.entries(GEMINI_TIER_INFO) as [GeminiTier, typeof GEMINI_TIER_INFO[GeminiTier]][]).map(([tier, info]) => (
+                    <label key={tier} className={`cursor-pointer rounded-lg border-2 p-2.5 transition-all ${
+                      (settings.geminiTier || 'free') === tier
+                        ? 'border-blue-400 bg-blue-50 shadow-sm'
+                        : 'border-gray-200 bg-white hover:border-gray-300'
+                    }`}>
+                      <input type="radio" name="geminiTier" className="sr-only" checked={(settings.geminiTier || 'free') === tier} onChange={() => updateSettings({ geminiTier: tier })} />
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="text-xs font-semibold text-gray-800">{info.label}</span>
+                        {info.chargesPerToken
+                          ? <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">💰 Billed</span>
+                          : <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-green-100 text-green-700">Free</span>
+                        }
+                      </div>
+                      <p className="text-xs text-gray-500">{info.description}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">~{info.estimatedRpm} RPM · {info.estimatedRpd.toLocaleString()} RPD</p>
+                    </label>
+                  ))}
+                </div>
+                {(settings.geminiTier || 'free') !== 'free' && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5">
+                    <p className="text-xs text-amber-800">
+                      <strong>Paid tier selected.</strong> API calls to Gemini will be tracked as paid usage. Pipeline roles assigned to "Gemini Free" will automatically use paid-tier pricing.
+                    </p>
+                  </div>
+                )}
+              </div>
+
               {/* Models */}
               <div className="border-t border-gray-100 pt-2">
                 <details>
-                  <summary className="cursor-pointer text-[10px] font-medium text-gray-500 hover:underline">
+                  <summary className="cursor-pointer text-xs font-medium text-gray-500 hover:underline">
                     Models ({AI_PROVIDERS['gemini-free'].models.length} free + {AI_PROVIDERS['gemini-paid'].models.length} paid)
                   </summary>
                   <div className="mt-2 space-y-2">
                     <div>
-                      <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Free Tier</span>
+                      <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Free Tier</span>
                       <div className="flex flex-wrap gap-1 mt-0.5">
                         {AI_PROVIDERS['gemini-free'].models.map(m => (
-                          <span key={m.id} className="inline-flex items-center gap-1 bg-gray-50 border border-gray-100 rounded px-1.5 py-0.5 text-[10px]">
+                          <span key={m.id} className="inline-flex items-center gap-1 bg-gray-50 border border-gray-100 rounded px-1.5 py-0.5 text-xs">
                             <span className="text-gray-600">{m.name}</span><CostBadge costTier={m.costTier} />
                           </span>
                         ))}
                       </div>
                     </div>
                     <div>
-                      <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Paid Tier</span>
+                      <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Paid Tier</span>
                       <div className="flex flex-wrap gap-1 mt-0.5">
                         {AI_PROVIDERS['gemini-paid'].models.map(m => (
-                          <span key={m.id} className="inline-flex items-center gap-1 bg-gray-50 border border-gray-100 rounded px-1.5 py-0.5 text-[10px]">
+                          <span key={m.id} className="inline-flex items-center gap-1 bg-gray-50 border border-gray-100 rounded px-1.5 py-0.5 text-xs">
                             <span className="text-gray-600">{m.name}</span><CostBadge costTier={m.costTier} />
                             {m.costPerMillionTokens != null && <span className="text-gray-400">${m.costPerMillionTokens}/${m.outputCostPerMillionTokens}</span>}
                           </span>
@@ -360,7 +500,7 @@ export default function SettingsPage() {
               subtitle={info.description}
               defaultOpen={false}
             >
-              <p className="text-[10px] text-gray-400">{info.description}</p>
+              <p className="text-xs text-gray-400">{info.description}</p>
 
               <div className="flex items-end gap-2">
                 <div className="flex-1 relative">
@@ -368,6 +508,9 @@ export default function SettingsPage() {
                     type={showKeyValues[type] ? 'text' : 'password'}
                     className="input text-sm font-mono pr-8"
                     placeholder={`Enter ${info.name} API key…`}
+                    autoComplete="off"
+                    data-1p-ignore
+                    data-lpignore="true"
                     value={settings.apiKeys[type] || ''}
                     onChange={e => setApiKey(type, e.target.value)}
                     onPaste={e => { e.stopPropagation(); const t = e.clipboardData.getData('text/plain'); if (t) { e.preventDefault(); setApiKey(type, t); } }}
@@ -382,14 +525,14 @@ export default function SettingsPage() {
                 {testResults[type] && <StatusBadge status={testResults[type] === 'success' ? 'verified' : 'error'} />}
               </div>
 
-              <div className="flex items-center justify-between text-[10px]">
+              <div className="flex items-center justify-between text-xs">
                 <a href={info.apiKeyHelpUrl} target="_blank" rel="noopener noreferrer" className="text-branch-600 hover:underline font-medium">Get API key →</a>
                 {info.apiKeyNote && <span className="text-gray-400 max-w-xs text-right">{info.apiKeyNote}</span>}
               </div>
 
               <div className="flex flex-wrap gap-1">
                 {info.models.map(m => (
-                  <span key={m.id} className="inline-flex items-center gap-1 bg-gray-50 border border-gray-100 rounded px-1.5 py-0.5 text-[10px]">
+                  <span key={m.id} className="inline-flex items-center gap-1 bg-gray-50 border border-gray-100 rounded px-1.5 py-0.5 text-xs">
                     <span className="text-gray-600">{m.name}</span><CostBadge costTier={m.costTier} />
                   </span>
                 ))}
@@ -399,7 +542,7 @@ export default function SettingsPage() {
         )}
 
         <div className="pt-2 border-t border-gray-100 flex items-center justify-between gap-3">
-          <p className="text-[11px] text-gray-500">If keys look wrong or duplicated, clear all saved keys and re-enter them.</p>
+          <p className="text-sm text-gray-500">If keys look wrong or duplicated, clear all saved keys and re-enter them.</p>
           <button className="btn-danger text-xs py-1.5" onClick={() => setConfirmClearKeys(true)}>
             Clear all saved API keys
           </button>
@@ -407,233 +550,264 @@ export default function SettingsPage() {
       </CollapsibleSection>
 
       {/* ══════════════════════════════════════════════════════════════════════
-          §2  COST & SPENDING
-          ══════════════════════════════════════════════════════════════════════ */}
-      <CollapsibleSection
-        id="cost"
-        title="Cost & Spending"
-        subtitle={`This month: $${displaySpend.toFixed(2)}${settings.spendingCapUsd > 0 ? ` / $${settings.spendingCapUsd.toFixed(2)}` : ''}`}
-      >
-        {/* Spending cap */}
-        <div className="space-y-3">
-          <label className="text-sm font-medium text-gray-700">Monthly Spending Cap</label>
-          <p className="text-xs text-gray-400">Estimated limit tracked locally. 0 = unlimited. <em>Always set real limits with each provider.</em></p>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <span className="text-gray-400">$</span>
-              <input type="number" className="input text-sm w-28" min={0} step={1} value={settings.spendingCapUsd} onChange={e => updateSettings({ spendingCapUsd: Math.max(0, parseFloat(e.target.value) || 0) })} />
-            </div>
-            <div className="border-l border-gray-200 pl-4">
-              <div className="text-lg font-bold text-gray-800">
-                ${displaySpend.toFixed(2)}
-                {settings.spendingCapUsd > 0 && <span className="text-sm font-normal text-gray-400"> / ${settings.spendingCapUsd.toFixed(2)}</span>}
-              </div>
-              {settings.spendingCapUsd > 0 && (
-                <div className="w-40 h-2 bg-gray-200 rounded-full mt-1 overflow-hidden">
-                  <div className={`h-full rounded-full transition-all ${displaySpend / settings.spendingCapUsd > 0.9 ? 'bg-red-500' : displaySpend / settings.spendingCapUsd > 0.7 ? 'bg-yellow-500' : 'bg-green-500'}`} style={{ width: `${Math.min(100, (displaySpend / settings.spendingCapUsd) * 100)}%` }} />
-                </div>
-              )}
-            </div>
-            <button className="btn-secondary text-xs" onClick={() => { updateSettings({ currentMonthSpendUsd: 0, spendingMonth: currentMonth }); showToast('Spending counter reset', 'info'); }}>Reset</button>
-          </div>
-        </div>
-
-        {/* Cost calculator */}
-        <div className="border-t border-gray-100 pt-4 space-y-2">
-          <label className="text-sm font-medium text-gray-700">Cost Calculator</label>
-          <p className="text-xs text-gray-400">Estimated cost per profile based on current settings.</p>
-          <CostCalculator settings={settings} />
-        </div>
-
-        {/* Cost dashboard */}
-        <div className="border-t border-gray-100 pt-4 space-y-2">
-          <label className="text-sm font-medium text-gray-700">Actual Cost Tracking</label>
-          <p className="text-xs text-gray-400">Real usage and cost data from all API calls.</p>
-          <CostDashboard />
-        </div>
-      </CollapsibleSection>
-
-      {/* ══════════════════════════════════════════════════════════════════════
-          §3  PIPELINE & ROLES
+          §3  PIPELINE & ROLES — vertical flow-chart style
           ══════════════════════════════════════════════════════════════════════ */}
       <CollapsibleSection
         id="pipeline"
         title="Pipeline & Roles"
-        subtitle={`${PIPELINE_MODE_INFO[settings.pipelineMode || 'balanced'].label} · ${settings.criticMode === 'specialized' ? 'Specialized critics' : 'Combined critic'} · ${settings.auditMode === 'skip' ? 'No audit' : settings.auditMode === 'multi-verifier' ? 'Multi-verifier' : 'Single-verifier'}`}
+        subtitle={`${settings.skipCritics ? 'Critics off' : 'Specialized critics'} · ${settings.maxAdversarialRounds || 3} round${(settings.maxAdversarialRounds || 3) !== 1 ? 's' : ''}`}
+        defaultOpen
       >
-        {/* ─── SECTION 1: Quality Mode ─── */}
-        <div className="rounded-xl border-2 border-indigo-100 bg-gradient-to-br from-indigo-50/40 to-white p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="w-7 h-7 rounded-lg bg-indigo-100 flex items-center justify-center text-sm">⚡</span>
-            <div>
-              <h4 className="text-sm font-bold text-gray-800">Quality Mode</h4>
-              <p className="text-[10px] text-gray-500">How thorough each profile build should be</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {(Object.entries(PIPELINE_MODE_INFO) as [PipelineMode, typeof PIPELINE_MODE_INFO[PipelineMode]][]).map(([mode, mi]) => (
-              <label key={mode} className={`cursor-pointer rounded-lg border-2 p-2.5 transition-all ${(settings.pipelineMode || 'balanced') === mode ? 'border-indigo-400 bg-indigo-50 shadow-sm' : 'border-gray-200 bg-white hover:border-gray-300'}`}>
-                <input type="radio" name="pipelineMode" className="sr-only" checked={(settings.pipelineMode || 'balanced') === mode} onChange={() => updateSettings({ pipelineMode: mode })} />
-                <div className="flex items-center justify-between mb-0.5">
-                  <span className="text-sm font-semibold text-gray-800">{mi.label}</span>
-                  <span className={`text-[10px] font-mono font-medium px-1.5 py-0.5 rounded ${(settings.pipelineMode || 'balanced') === mode ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'}`}>{mi.approxCalls}</span>
-                </div>
-                <p className="text-[10px] text-gray-500">{mi.description}</p>
-              </label>
-            ))}
-          </div>
-        </div>
+        <p className="text-xs text-gray-500 mb-2">
+          Each profile build follows these steps in order. Configure the search provider, AI models, and review strategy for each stage.
+        </p>
 
-        {/* ─── SECTION 2: Review Strategy ─── */}
-        <div className="rounded-xl border-2 border-amber-100 bg-gradient-to-br from-amber-50/40 to-white p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="w-7 h-7 rounded-lg bg-amber-100 flex items-center justify-center text-sm">🔍</span>
-            <div>
-              <h4 className="text-sm font-bold text-gray-800">Review Strategy</h4>
-              <p className="text-[10px] text-gray-500">How profiles are critiqued and fact-checked</p>
-            </div>
-          </div>
+        {/* Vertical flow connector */}
+        <div className="relative space-y-0">
+          {/* Dashed connector line */}
+          <div className="absolute left-5 top-8 bottom-8 w-0.5 bg-gradient-to-b from-violet-300 via-sky-300 via-amber-300 to-emerald-300 opacity-40" />
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-gray-600 mb-1 block">Critic Mode</label>
-              <select className="input text-sm" value={settings.criticMode || 'combined'} onChange={e => updateSettings({ criticMode: e.target.value as CriticMode })} disabled={(settings.pipelineMode || 'balanced') === 'draft'}>
-                <option value="combined">Combined (1 call)</option>
-                <option value="specialized">Specialized (3 agents)</option>
-              </select>
-              <p className="text-[10px] text-gray-400 mt-1">{(settings.pipelineMode || 'balanced') === 'draft' ? '⏭ Skipped in Draft mode' : 'Combined = faster. Specialized = deeper review.'}</p>
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-600 mb-1 block">Fact-Check Mode</label>
-              <select className="input text-sm" value={settings.auditMode || 'single-verifier'} onChange={e => updateSettings({ auditMode: e.target.value as AuditMode })} disabled={(settings.pipelineMode || 'balanced') === 'draft'}>
-                <option value="single-verifier">Single Verifier</option>
-                <option value="multi-verifier">Multi-Verifier (consensus)</option>
-                <option value="skip">Skip Fact-Check</option>
-              </select>
-              <p className="text-[10px] text-gray-400 mt-1">{(settings.pipelineMode || 'balanced') === 'draft' ? '⏭ Skipped in Draft mode' : 'Runs automatically after the build.'}</p>
-            </div>
-          </div>
-        </div>
+          {/* ═══ STEP 1: Web Research ═══ */}
+          <div className="relative pl-12 pb-4">
+            <div className="absolute left-2 top-3 w-7 h-7 rounded-full bg-violet-100 border-2 border-violet-400 flex items-center justify-center text-xs font-bold text-violet-700 z-10">1</div>
+            <div className="rounded-xl border-2 border-violet-100 bg-gradient-to-br from-violet-50/40 to-white p-4 space-y-3">
+              <div>
+                <h4 className="text-sm font-bold text-gray-800">🔍 Web Research</h4>
+                <p className="text-xs text-gray-500">Search the web for candidate information — campaign sites, social media, news articles</p>
+              </div>
 
-        {/* ─── SECTION 3: Adversarial Loop ─── */}
-        <div className="rounded-xl border-2 border-emerald-100 bg-gradient-to-br from-emerald-50/40 to-white p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="w-7 h-7 rounded-lg bg-emerald-100 flex items-center justify-center text-sm">🔁</span>
-            <div>
-              <h4 className="text-sm font-bold text-gray-800">Adversarial Loop</h4>
-              <p className="text-[10px] text-gray-500">How many rounds of Writer ↔ Critic feedback</p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-gray-600 mb-1 block">When to Stop</label>
-              <select className="input text-sm" value={settings.convergenceMode} onChange={e => updateSettings({ convergenceMode: e.target.value as AppSettings['convergenceMode'] })}>
-                <option value="human-in-the-loop">Ask me each round</option>
-                <option value="auto-converge">Auto (stop when score is high)</option>
-                <option value="fixed-rounds">Fixed number of rounds</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-600 mb-1 block">Critic Execution</label>
-              <select className="input text-sm" value={settings.criticParallelism ?? 'parallel'} onChange={e => updateSettings({ criticParallelism: e.target.value as CriticParallelism })}>
-                <option value="parallel">Parallel (faster)</option>
-                <option value="sequential">Sequential</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-600 mb-1 block">Max Rounds</label>
-              <input type="number" className="input text-sm w-full" min={1} max={10} value={settings.maxAdversarialRounds} onChange={e => updateSettings({ maxAdversarialRounds: Math.max(1, Math.min(10, parseInt(e.target.value) || 3)) })} />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-600 mb-1 block">Quality Threshold</label>
-              <input type="number" className="input text-sm w-full" min={0} max={100} value={settings.convergenceThreshold || 80} onChange={e => updateSettings({ convergenceThreshold: Math.max(0, Math.min(100, parseInt(e.target.value) || 80)) })} />
-              <p className="text-[10px] text-gray-400 mt-0.5">Score ≥ {settings.convergenceThreshold || 80} = done</p>
-            </div>
-          </div>
-        </div>
-
-        {/* ─── SECTION 4: AI Assignments ─── */}
-        <div className="rounded-xl border-2 border-sky-100 bg-gradient-to-br from-sky-50/40 to-white p-4 space-y-4">
-          <div className="flex items-center gap-2">
-            <span className="w-7 h-7 rounded-lg bg-sky-100 flex items-center justify-center text-sm">🤖</span>
-            <div>
-              <h4 className="text-sm font-bold text-gray-800">AI Assignments</h4>
-              <p className="text-[10px] text-gray-500">Which AI model handles each step of the pipeline</p>
-            </div>
-          </div>
-
-          {/* Writer & Extractor */}
-          <div className="space-y-2">
-            <span className="text-[10px] font-bold text-sky-600 uppercase tracking-wider">Core Agents</span>
-            {ROLES.map(role => {
-              const cur = settings.roleAssignments?.[role.key as keyof typeof settings.roleAssignments] as { provider: AIProviderType; model?: string } | undefined;
-              const prov = cur?.provider || 'gemini-free';
-              const model = cur?.model || AI_PROVIDERS[prov].defaultModel;
-              return (
-                <div key={role.key} className="bg-white rounded-lg border border-sky-200/60 p-3 flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <label className="text-xs font-semibold text-gray-700">{role.label}</label>
-                    <p className="text-[10px] text-gray-400 truncate">{role.desc}</p>
+              <div className="flex gap-3">
+                <label className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-all ${
+                  (settings.searchProvider || 'duckduckgo') === 'duckduckgo'
+                    ? 'border-branch-500 bg-branch-50 ring-1 ring-branch-200'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}>
+                  <input type="radio" name="searchProvider" className="sr-only" checked={(settings.searchProvider || 'duckduckgo') === 'duckduckgo'} onChange={() => updateSettings({ searchProvider: 'duckduckgo' })} />
+                  <span className="text-lg">🦆</span>
+                  <div>
+                    <div className="text-sm font-medium text-gray-800">DuckDuckGo</div>
+                    <div className="text-xs text-gray-400">Free, no API key needed</div>
                   </div>
-                  <select className="input text-xs w-36" value={prov} onChange={e => setRole(role.key, e.target.value as AIProviderType)}>
-                    {PROVIDER_ENTRIES.map(([t, inf]) => <option key={t} value={t}>{inf.name}</option>)}
-                  </select>
-                  <ModelPicker providerType={prov} selectedModel={model} onSelect={m => setRoleModel(role.key, m)} compact />
-                </div>
-              );
-            })}
-          </div>
+                </label>
 
-          {/* Critic agents */}
-          <div className="space-y-2">
-            <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wider">Critic Agents</span>
-            {CRITIC_AGENTS.map(agent => {
-              const cur = settings.roleAssignments?.[agent.key as keyof typeof settings.roleAssignments] as { provider: AIProviderType; model?: string } | undefined;
-              const prov = cur?.provider || 'gemini-free';
-              const model = cur?.model || AI_PROVIDERS[prov].defaultModel;
-              const rc = settings.criticRunCounts ?? { factChecker: 1, languageReviewer: 1, styleAuditor: 1 };
-              return (
-                <div key={agent.key} className="bg-white rounded-lg border border-amber-200/60 p-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1 min-w-0">
-                      <label className="text-xs font-semibold text-gray-700">{agent.emoji} {agent.label}</label>
-                      <p className="text-[10px] text-gray-400 truncate">{agent.desc}</p>
+                <label className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-all ${
+                  settings.searchProvider === 'google-cse'
+                    ? 'border-branch-500 bg-branch-50 ring-1 ring-branch-200'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}>
+                  <input type="radio" name="searchProvider" className="sr-only" checked={settings.searchProvider === 'google-cse'} onChange={() => updateSettings({ searchProvider: 'google-cse' })} />
+                  <span className="text-lg">🔍</span>
+                  <div>
+                    <div className="text-sm font-medium text-gray-800">Google Custom Search</div>
+                    <div className="text-xs text-gray-400">Requires API key + Engine ID</div>
+                  </div>
+                </label>
+              </div>
+
+              {settings.searchProvider === 'google-cse' && (
+                <div className="space-y-3 p-3 bg-gray-50 rounded-lg border border-gray-100">
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 mb-1 block">Google API Key</label>
+                    <div className="flex items-end gap-2">
+                      <div className="flex-1 relative">
+                        <input
+                          type={showGoogleKey ? 'text' : 'password'}
+                          className="input text-sm pr-8 w-full font-mono"
+                          placeholder="AIza..."
+                          autoComplete="off"
+                          data-1p-ignore
+                          data-lpignore="true"
+                          value={settings.googleSearchApiKey || ''}
+                          onChange={e => updateSettings({ googleSearchApiKey: e.target.value })}
+                        />
+                        <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" onClick={() => setShowGoogleKey(p => !p)}>
+                          <EyeIcon open={showGoogleKey} />
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <label className="text-[10px] text-gray-400">Runs</label>
-                      <input type="number" className="input text-xs w-12 text-center" min={1} max={3} value={rc[agent.rcKey]} onChange={e => { const v = Math.max(1, Math.min(3, parseInt(e.target.value) || 1)); updateSettings({ criticRunCounts: { ...rc, [agent.rcKey]: v } }); }} />
+                    <p className="text-xs text-gray-400 mt-1">Encrypted alongside your LLM API keys</p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 mb-1 block">Search Engine ID (cx)</label>
+                    <div className="relative">
+                      <input
+                        type={showGoogleCx ? 'text' : 'password'}
+                        className="input text-sm w-full font-mono pr-8"
+                        placeholder="your-search-engine-id"
+                        autoComplete="off"
+                        data-1p-ignore
+                        data-lpignore="true"
+                        value={settings.googleSearchEngineId || ''}
+                        onChange={e => updateSettings({ googleSearchEngineId: e.target.value })}
+                      />
+                      <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" onClick={() => setShowGoogleCx(p => !p)}>
+                        <EyeIcon open={showGoogleCx} />
+                      </button>
                     </div>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Create at <a href="https://programmablesearchengine.google.com/" target="_blank" rel="noopener noreferrer" className="text-branch-600 underline">Programmable Search Engine</a>
+                    </p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <select className="input text-xs flex-1" value={prov} onChange={e => setRole(agent.key, e.target.value as AIProviderType)}>
-                      {PROVIDER_ENTRIES.map(([t, inf]) => <option key={t} value={t}>{inf.name}</option>)}
-                    </select>
-                    <ModelPicker providerType={prov} selectedModel={model} onSelect={m => setRoleModel(agent.key, m)} compact />
+                  <div className="flex items-center gap-2 pt-1">
+                    <button className="btn-secondary text-xs py-1.5 px-3" onClick={handleTestGoogle} disabled={testingGoogle || !settings.googleSearchApiKey || !settings.googleSearchEngineId}>
+                      {testingGoogle ? <Spinner size="sm" /> : 'Test Connection'}
+                    </button>
+                    {googleTestResult && <StatusBadge status={googleTestResult === 'success' ? 'verified' : 'error'} />}
+                    <span className="text-xs text-gray-400">Tests API key + Engine ID with a sample search</span>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-
-          {/* Verifiers */}
-          <div className="space-y-2">
-            <span className="text-[10px] font-bold text-green-600 uppercase tracking-wider">Fact-Check Verifiers</span>
-            <div className="bg-white rounded-lg border border-green-200/60 p-3 space-y-2">
-              <p className="text-[10px] text-gray-400">Multiple verifiers cross-check each other for consensus-based fact-checking.</p>
-              {currentVerifiers.map((v, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <select className="input text-xs flex-1" value={v.provider} onChange={e => { const updated = [...currentVerifiers]; const np = e.target.value as AIProviderType; updated[i] = { provider: np, model: AI_PROVIDERS[np].defaultModel }; setVerifiers(updated); }}>
-                    {PROVIDER_ENTRIES.map(([t, inf]) => <option key={t} value={t}>{inf.name}</option>)}
-                  </select>
-                  <ModelPicker providerType={v.provider} selectedModel={v.model || AI_PROVIDERS[v.provider].defaultModel} onSelect={m => { const updated = [...currentVerifiers]; updated[i] = { ...updated[i], model: m }; setVerifiers(updated); }} compact />
-                  {currentVerifiers.length > 1 && <button className="text-red-400 hover:text-red-600 text-xs px-1.5" onClick={() => setVerifiers(currentVerifiers.filter((_, j) => j !== i))}>✕</button>}
-                </div>
-              ))}
-              <button className="text-xs text-branch-600 hover:underline font-medium" onClick={() => setVerifiers([...currentVerifiers, { provider: 'gemini-free' }])}>+ Add verifier</button>
+              )}
             </div>
           </div>
-        </div>
+
+
+
+          {/* ═══ STEP 2: Writer ═══ */}
+          <div className="relative pl-12 pb-4">
+            <div className="absolute left-2 top-3 w-7 h-7 rounded-full bg-sky-100 border-2 border-sky-400 flex items-center justify-center text-xs font-bold text-sky-700 z-10">2</div>
+            <div className="rounded-xl border-2 border-sky-100 bg-gradient-to-br from-sky-50/40 to-white p-4 space-y-3">
+              <div>
+                <h4 className="text-sm font-bold text-gray-800">✍️ Writer Agent</h4>
+                <p className="text-xs text-gray-500">Generates the candidate profile from research material</p>
+              </div>
+              {(() => {
+                const role = ROLES[0]; // writer
+                const cur = settings.roleAssignments?.[role.key as keyof typeof settings.roleAssignments] as { provider: AIProviderType; model?: string } | undefined;
+                const prov = cur?.provider || 'gemini-free';
+                const model = cur?.model || AI_PROVIDERS[prov].defaultModel;
+                return (
+                  <>
+                    <ModelPicker providerType={prov} selectedModel={model} onSelect={(p, m) => setRole(role.key, p, m)} compact />
+                    {role.promptRole && role.promptDefault && (
+                      <PromptEditor role={role.promptRole} label={`${role.label} Prompt`} emoji="✍️" defaultPrompt={role.promptDefault} />
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+
+          {/* ═══ STEP 3: Critic Review ═══ */}
+          <div className="relative pl-12 pb-4">
+            <div className="absolute left-2 top-3 w-7 h-7 rounded-full bg-amber-100 border-2 border-amber-400 flex items-center justify-center text-xs font-bold text-amber-700 z-10">3</div>
+            <div className={`rounded-xl border-2 border-amber-100 bg-gradient-to-br from-amber-50/40 to-white p-4 space-y-3 ${settings.skipCritics ? 'opacity-50' : ''}`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-bold text-gray-800">🔍 Critic Review</h4>
+                  <p className="text-xs text-gray-500">Three specialized agents review each draft</p>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <span className="text-xs text-gray-500">{settings.skipCritics ? 'Skipped' : 'Enabled'}</span>
+                  <div className={`relative w-9 h-5 rounded-full transition-colors ${settings.skipCritics ? 'bg-gray-300' : 'bg-branch-500'}`} onClick={() => updateSettings({ skipCritics: !settings.skipCritics })}>
+                    <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${settings.skipCritics ? 'left-0.5' : 'left-[18px]'}`} />
+                  </div>
+                </label>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-gray-600 mb-1 block">Execution</label>
+                <select className="input text-sm w-48" value={settings.criticParallelism ?? 'parallel'} onChange={e => updateSettings({ criticParallelism: e.target.value as CriticParallelism })} disabled={settings.skipCritics}>
+                  <option value="parallel">Parallel (faster)</option>
+                  <option value="sequential">Sequential</option>
+                </select>
+              </div>
+
+              {/* Specialized critic agents */}
+              {CRITIC_AGENTS.map(agent => {
+                const cur = settings.roleAssignments?.[agent.key as keyof typeof settings.roleAssignments] as { provider: AIProviderType; model?: string } | undefined;
+                const prov = cur?.provider || 'gemini-free';
+                const model = cur?.model || AI_PROVIDERS[prov].defaultModel;
+                const rc = settings.criticRunCounts ?? { factChecker: 1, languageReviewer: 1, styleAuditor: 1 };
+                return (
+                  <div key={agent.key} className="bg-white rounded-lg border border-amber-200/60 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1 min-w-0">
+                        <label className="text-xs font-semibold text-gray-700">{agent.emoji} {agent.label}</label>
+                        <p className="text-xs text-gray-400 truncate">{agent.desc}</p>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <label className="text-xs text-gray-400">Runs</label>
+                        <input type="number" className="input text-xs w-12 text-center" min={1} max={3} value={rc[agent.rcKey]} onChange={e => { const v = Math.max(1, Math.min(3, parseInt(e.target.value) || 1)); updateSettings({ criticRunCounts: { ...rc, [agent.rcKey]: v } }); }} />
+                      </div>
+                    </div>
+                    <ModelPicker providerType={prov} selectedModel={model} onSelect={(p, m) => setRole(agent.key, p, m)} compact />
+                    <PromptEditor role={agent.promptRole} label={`${agent.label} Prompt`} emoji={agent.emoji} defaultPrompt={agent.promptDefault} />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ═══ STEP 4: Adversarial Loop ═══ */}
+          <div className="relative pl-12 pb-4">
+            <div className="absolute left-2 top-3 w-7 h-7 rounded-full bg-emerald-100 border-2 border-emerald-400 flex items-center justify-center text-xs font-bold text-emerald-700 z-10">4</div>
+            <div className="rounded-xl border-2 border-emerald-100 bg-gradient-to-br from-emerald-50/40 to-white p-4 space-y-3">
+              <div>
+                <h4 className="text-sm font-bold text-gray-800">🔁 Adversarial Loop</h4>
+                <p className="text-xs text-gray-500">How many rounds of Writer ↔ Critic feedback</p>
+              </div>
+
+              {/* Clarification callout */}
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-xs text-emerald-800">
+                <p className="font-semibold mb-1">How it works:</p>
+                <div className="flex items-center gap-2 text-emerald-700">
+                  <span className="bg-emerald-200 rounded px-1.5 py-0.5 font-mono text-[10px]">Round 1</span>
+                  <span>Generate initial draft from research</span>
+                </div>
+                <div className="flex items-center gap-2 text-emerald-700 mt-1">
+                  <span className="bg-emerald-200 rounded px-1.5 py-0.5 font-mono text-[10px]">Round 2+</span>
+                  <span><strong>Revise</strong> the existing draft — all stances, bios & links are preserved and refined</span>
+                </div>
+                <p className="mt-1.5 text-emerald-600 italic">The writer never discards prior work. Every round builds on what came before.</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 mb-1 block">When to Stop</label>
+                  <select className="input text-sm" value={settings.convergenceMode} onChange={e => updateSettings({ convergenceMode: e.target.value as AppSettings['convergenceMode'] })}>
+                    <option value="human-in-the-loop">Ask me each round</option>
+                    <option value="auto-converge">Auto (stop when score is high)</option>
+                    <option value="fixed-rounds">Fixed number of rounds</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 mb-1 block">Max Rounds</label>
+                  <input type="number" className="input text-sm w-full" min={1} max={10} value={settings.maxAdversarialRounds} onChange={e => updateSettings({ maxAdversarialRounds: Math.max(1, Math.min(10, parseInt(e.target.value) || 3)) })} />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 mb-1 block">Quality Threshold</label>
+                  <input type="number" className="input text-sm w-full" min={0} max={100} value={settings.convergenceThreshold || 80} onChange={e => updateSettings({ convergenceThreshold: Math.max(0, Math.min(100, parseInt(e.target.value) || 80)) })} />
+                  <p className="text-xs text-gray-400 mt-0.5">Score ≥ {settings.convergenceThreshold || 80} = done</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ═══ STEP 5: Source Verification ═══ */}
+          <div className="relative pl-12 pb-4">
+            <div className="absolute left-2 top-3 w-7 h-7 rounded-full bg-rose-100 border-2 border-rose-400 flex items-center justify-center text-xs font-bold text-rose-700 z-10">5</div>
+            <div className="rounded-xl border-2 border-rose-100 bg-gradient-to-br from-rose-50/40 to-white p-4 space-y-3">
+              <div>
+                <h4 className="text-sm font-bold text-gray-800">🔍 Source Verification</h4>
+                <p className="text-xs text-gray-500">Fetches cited URLs and verifies that quoted content actually appears on the page</p>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-gray-600 mb-1 block">Verifier Model</label>
+                {(() => {
+                  const cur = currentVerifiers[0];
+                  const prov = cur?.provider || 'gemini-free';
+                  const model = cur?.model || AI_PROVIDERS[prov].defaultModel;
+                  return (
+                    <ModelPicker providerType={prov} selectedModel={model} onSelect={(p, m) => setVerifiers([{ provider: p, model: m }])} compact />
+                  );
+                })()}
+                <p className="text-xs text-gray-400 mt-1">AI model used to verify extracted quotes against source pages.</p>
+              </div>
+            </div>
+          </div>
+
+        </div>{/* end flow container */}
       </CollapsibleSection>
 
       {/* ══════════════════════════════════════════════════════════════════════
@@ -648,7 +822,7 @@ export default function SettingsPage() {
               <div key={s.id} className="flex items-center justify-between py-2.5">
                 <div>
                   <div className="text-sm font-medium text-gray-800">{s.candidateName}</div>
-                  <div className="text-[10px] text-gray-400">{s.status} · {s.builderRounds.length} rounds · {new Date(s.updatedAt).toLocaleString()}</div>
+                  <div className="text-xs text-gray-400">{s.status} · {s.builderRounds.length} rounds · {new Date(s.updatedAt).toLocaleString()}</div>
                 </div>
                 <button className="btn-danger text-xs py-1" onClick={() => setDeletingSession(s.id)}>Delete</button>
               </div>
@@ -656,6 +830,59 @@ export default function SettingsPage() {
           </div>
         )}
       </CollapsibleSection>
+
+      </div>{/* ══ end left column ══ */}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          RIGHT COLUMN — sticky cost panel
+          ══════════════════════════════════════════════════════════════════════ */}
+      <div className="w-80 shrink-0 hidden lg:block">
+        <div className="sticky top-4 space-y-4 max-h-[calc(100vh-2rem)] overflow-y-auto pr-1">
+          {/* ── Spending summary ── */}
+          <div className="card p-4 space-y-3 rounded-xl border border-gray-200 bg-white shadow-sm">
+            <h3 className="text-sm font-bold text-gray-800">💰 Cost &amp; Spending</h3>
+
+            {/* Monthly spend */}
+            <div>
+              <div className="text-2xl font-bold text-gray-800">
+                ${displaySpend.toFixed(2)}
+                {settings.spendingCapUsd > 0 && <span className="text-sm font-normal text-gray-400"> / ${settings.spendingCapUsd.toFixed(2)}</span>}
+              </div>
+              {settings.spendingCapUsd > 0 && (
+                <div className="w-full h-2 bg-gray-200 rounded-full mt-1.5 overflow-hidden">
+                  <div className={`h-full rounded-full transition-all ${displaySpend / settings.spendingCapUsd > 0.9 ? 'bg-red-500' : displaySpend / settings.spendingCapUsd > 0.7 ? 'bg-yellow-500' : 'bg-green-500'}`} style={{ width: `${Math.min(100, (displaySpend / settings.spendingCapUsd) * 100)}%` }} />
+                </div>
+              )}
+              <p className="text-xs text-gray-400 mt-1">This month · estimated from local tracking</p>
+            </div>
+
+            {/* Spending cap */}
+            <div className="border-t border-gray-100 pt-3">
+              <label className="text-xs font-semibold text-gray-600 mb-1 block">Monthly Spending Cap</label>
+              <div className="flex items-center gap-2">
+                <span className="text-gray-400 text-sm">$</span>
+                <input type="number" className="input text-sm w-20" min={0} step={1} value={settings.spendingCapUsd} onChange={e => updateSettings({ spendingCapUsd: Math.max(0, parseFloat(e.target.value) || 0) })} />
+                <button className="btn-secondary text-xs py-1" onClick={() => { updateSettings({ currentMonthSpendUsd: 0, spendingMonth: currentMonth }); showToast('Spending counter reset', 'info'); }}>Reset</button>
+              </div>
+              <p className="text-xs text-gray-400 mt-1">0 = unlimited. Always set real limits with your provider.</p>
+            </div>
+          </div>
+
+          {/* ── Cost calculator ── */}
+          <div className="card p-4 space-y-2 rounded-xl border border-gray-200 bg-white shadow-sm">
+            <h3 className="text-sm font-bold text-gray-800">🧮 Cost Calculator</h3>
+            <p className="text-xs text-gray-400">Estimated cost per profile based on current settings.</p>
+            <CostCalculator settings={settings} />
+          </div>
+
+          {/* ── Actual cost tracking ── */}
+          <div className="card p-4 space-y-2 rounded-xl border border-gray-200 bg-white shadow-sm">
+            <h3 className="text-sm font-bold text-gray-800">📊 Actual Costs</h3>
+            <p className="text-xs text-gray-400">Real usage from API calls.</p>
+            <CostDashboard />
+          </div>
+        </div>
+      </div>
 
       {/* Delete confirmation */}
       {deletingSession && (

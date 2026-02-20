@@ -124,7 +124,7 @@ export default function LinksPanel({ links, compact = false }: LinksPanelProps) 
                           >
                             <span className="text-green-600 group-hover:text-green-700">✓</span>
                             {link.confidence && (
-                              <span className={`text-[9px] px-1 rounded border ${CONFIDENCE_COLORS[link.confidence]}`}>
+                              <span className={`text-sm px-1 rounded border ${CONFIDENCE_COLORS[link.confidence]}`}>
                                 {link.confidence.charAt(0).toUpperCase()}
                               </span>
                             )}
@@ -149,7 +149,7 @@ export default function LinksPanel({ links, compact = false }: LinksPanelProps) 
             <span className="text-xs font-semibold text-gray-600 uppercase tracking-wider">
               Articles & Sources
             </span>
-            <span className="text-[10px] text-gray-400">{articles.length} found</span>
+            <span className="text-xs text-gray-400">{articles.length} found</span>
           </div>
           <div className="divide-y divide-gray-50 max-h-60 overflow-y-auto">
             {articles.map((article, i) => (
@@ -180,14 +180,14 @@ function ArticleRow({ source }: { source: Source }) {
       >
         {source.title || domain}
       </a>
-      <span className="text-[10px] text-gray-400 flex-shrink-0">{domain}</span>
+      <span className="text-xs text-gray-400 flex-shrink-0">{domain}</span>
       {source.paywalled && (
-        <span className="inline-flex items-center gap-0.5 text-[9px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 flex-shrink-0">
+        <span className="inline-flex items-center gap-0.5 text-sm font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 flex-shrink-0">
           🔒 Paywall
         </span>
       )}
       {source.sourceType && (
-        <span className={`text-[9px] px-1.5 py-0.5 rounded border flex-shrink-0 ${
+        <span className={`text-sm px-1.5 py-0.5 rounded border flex-shrink-0 ${
           source.sourceType === 'social' ? 'bg-blue-50 text-blue-600 border-blue-200' :
           source.sourceType === 'news' ? 'bg-purple-50 text-purple-600 border-purple-200' :
           source.sourceType === 'website' ? 'bg-green-50 text-green-600 border-green-200' :

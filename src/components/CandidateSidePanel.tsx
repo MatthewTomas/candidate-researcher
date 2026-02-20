@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { exportAsBranchJSON, exportAsMarkdown, exportAuditReport } from '../services/exportService';
+import { exportAsBranchJSON, exportAsMarkdown, exportBuildLog } from '../services/exportService';
+import { getCostSummary } from '../services/costTracker';
+import { estimateSingleRunCost } from './CostCalculator';
 import type { BatchQueueItem, CandidateSession } from '../types';
 
 /* ─── Helpers ──────────────────────────────────────── */
@@ -20,7 +21,7 @@ function safeName(n: string) {
   return n.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, '');
 }
 
-type PanelTab = 'info' | 'draft' | 'log' | 'audit';
+type PanelTab = 'info' | 'draft' | 'log';
 
 const STATUS_LABEL: Record<string, string> = {
   queued: 'Queued',
@@ -45,8 +46,7 @@ interface Props {
 }
 
 export default function CandidateSidePanel({ item, onClose }: Props) {
-  const { sessions, setActiveSession, showToast } = useApp();
-  const navigate = useNavigate();
+  const { sessions, showToast, settings } = useApp();
 
   const session: CandidateSession | undefined = useMemo(
     () => item.sessionId ? sessions.find(s => s.id === item.sessionId) : undefined,
@@ -55,26 +55,25 @@ export default function CandidateSidePanel({ item, onClose }: Props) {
 
   const hasSession = Boolean(session);
   const hasDraft = Boolean(session?.currentDraft);
-  const hasAudit = Boolean(session?.auditReports?.length);
   const hasLog = Boolean(session?.buildLog?.length);
 
-  // Pick sensible default tab
-  const defaultTab: PanelTab = hasDraft ? 'draft' : 'info';
+  // Pick sensible default tab — show log for actively processing items
+  const isActivelyProcessing = ['importing', 'researching', 'building', 'auditing'].includes(item.status);
+  const defaultTab: PanelTab = isActivelyProcessing ? 'log' : hasDraft ? 'draft' : hasLog ? 'log' : 'info';
   const [tab, setTab] = useState<PanelTab>(defaultTab);
 
-  // Reset tab when item changes
+  // Reset tab when item changes, or switch to log when processing starts
   useEffect(() => {
-    setTab(hasDraft ? 'draft' : 'info');
-  }, [item.id, hasDraft]);
+    if (isActivelyProcessing) {
+      setTab('log');
+    } else {
+      setTab(hasDraft ? 'draft' : hasLog ? 'log' : 'info');
+    }
+  }, [item.id, hasDraft, hasLog, isActivelyProcessing]);
 
   const m = item.metadata;
 
   /* ─── Actions ────────────────────────────────────── */
-  const handleOpenInBuilder = useCallback(() => {
-    if (!session) return;
-    setActiveSession(session);
-    navigate('/build');
-  }, [session, setActiveSession, navigate]);
 
   const handleExportJSON = useCallback(() => {
     if (!session?.currentDraft) return;
@@ -96,23 +95,11 @@ export default function CandidateSidePanel({ item, onClose }: Props) {
     showToast('Markdown exported', 'success');
   }, [session, showToast]);
 
-  const handleExportAudit = useCallback(() => {
-    if (!session?.auditReports?.length) return;
-    const latest = session.auditReports[session.auditReports.length - 1];
-    downloadFile(
-      exportAuditReport(latest),
-      `${safeName(session.candidateName)}_audit.txt`,
-      'text/plain',
-    );
-    showToast('Audit report exported', 'success');
-  }, [session, showToast]);
-
   /* ─── Tab definitions ───────────────────────────── */
   const tabs: { id: PanelTab; label: string; enabled: boolean }[] = [
     { id: 'info', label: 'Info', enabled: true },
     { id: 'draft', label: 'Draft', enabled: hasDraft },
     { id: 'log', label: 'Log', enabled: hasLog },
-    { id: 'audit', label: 'Audit', enabled: hasAudit },
   ];
 
   /* ═══════════════════ RENDER ═══════════════════════ */
@@ -131,7 +118,7 @@ export default function CandidateSidePanel({ item, onClose }: Props) {
           <div className="min-w-0">
             <h3 className="text-base font-bold text-gray-900 truncate">{item.candidateName}</h3>
             <div className="flex items-center gap-2 mt-0.5">
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+              <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
                 item.status === 'complete' ? 'bg-green-100 text-green-700' :
                 item.status === 'error' ? 'bg-red-100 text-red-700' :
                 'bg-gray-100 text-gray-600'
@@ -139,7 +126,7 @@ export default function CandidateSidePanel({ item, onClose }: Props) {
                 {STATUS_LABEL[item.status] || item.status}
               </span>
               {m.party && (
-                <span className="text-[10px] text-gray-500">{PARTY_NAMES[m.party] || m.party}</span>
+                <span className="text-xs text-gray-500">{PARTY_NAMES[m.party] || m.party}</span>
               )}
             </div>
           </div>
@@ -155,25 +142,15 @@ export default function CandidateSidePanel({ item, onClose }: Props) {
 
         {/* Action bar */}
         <div className="px-5 py-2.5 bg-gray-50/70 border-b border-gray-100 flex items-center gap-2 shrink-0 flex-wrap">
-          {hasSession && (
-            <button className="text-[11px] font-medium text-branch-600 hover:text-branch-700 px-2 py-1 rounded hover:bg-branch-50 transition-colors" onClick={handleOpenInBuilder}>
-              Open in Builder
-            </button>
-          )}
           {hasDraft && (
             <>
-              <button className="text-[11px] font-medium text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100 transition-colors" onClick={handleExportJSON}>
+              <button className="text-sm font-medium text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100 transition-colors" onClick={handleExportJSON}>
                 Export JSON
               </button>
-              <button className="text-[11px] font-medium text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100 transition-colors" onClick={handleExportMD}>
+              <button className="text-sm font-medium text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100 transition-colors" onClick={handleExportMD}>
                 Export MD
               </button>
             </>
-          )}
-          {hasAudit && (
-            <button className="text-[11px] font-medium text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100 transition-colors" onClick={handleExportAudit}>
-              Export Audit
-            </button>
           )}
         </div>
 
@@ -202,7 +179,6 @@ export default function CandidateSidePanel({ item, onClose }: Props) {
           {tab === 'info' && <InfoTab item={item} session={session} />}
           {tab === 'draft' && session && <DraftTab session={session} />}
           {tab === 'log' && session && <LogTab session={session} />}
-          {tab === 'audit' && session && <AuditTab session={session} />}
         </div>
       </div>
     </>
@@ -214,6 +190,8 @@ export default function CandidateSidePanel({ item, onClose }: Props) {
 /* ─── Info Tab ─────────────────────────────────────── */
 
 function InfoTab({ item, session }: { item: BatchQueueItem; session?: CandidateSession }) {
+  const { settings, updateQueueItem } = useApp();
+  const [newUrl, setNewUrl] = useState('');
   const m = item.metadata;
 
   const rows: [string, string | undefined][] = [
@@ -234,8 +212,8 @@ function InfoTab({ item, session }: { item: BatchQueueItem; session?: CandidateS
         <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1.5">
           {rows.filter(([, v]) => v).map(([label, value]) => (
             <React.Fragment key={label}>
-              <dt className="text-[11px] text-gray-400 font-medium">{label}</dt>
-              <dd className="text-[11px] text-gray-700">{value}</dd>
+              <dt className="text-sm text-gray-400 font-medium">{label}</dt>
+              <dd className="text-sm text-gray-700">{value}</dd>
             </React.Fragment>
           ))}
         </dl>
@@ -249,7 +227,7 @@ function InfoTab({ item, session }: { item: BatchQueueItem; session?: CandidateS
         <Section title="Issues to Cover">
           <div className="flex flex-wrap gap-1">
             {m.issuesToCover.map((issue, i) => (
-              <span key={i} className="text-[10px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+              <span key={i} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
                 {issue}
               </span>
             ))}
@@ -257,20 +235,74 @@ function InfoTab({ item, session }: { item: BatchQueueItem; session?: CandidateS
         </Section>
       ) : null}
 
-      {/* Session stats */}
+      {/* Source URLs — editable when queued */}
+      <Section title="Source URLs">
+        {item.sourceUrls?.length ? (
+          <ul className="space-y-1">
+            {item.sourceUrls.map((url, i) => (
+              <li key={i} className="flex items-center gap-1.5 group">
+                <a href={url} target="_blank" rel="noopener noreferrer"
+                  className="text-sm text-branch-600 hover:underline truncate flex-1 font-mono">
+                  {url}
+                </a>
+                {item.status === 'queued' && (
+                  <button
+                    className="text-xs text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={() => {
+                      const next = item.sourceUrls!.filter((_, j) => j !== i);
+                      updateQueueItem(item.id, { sourceUrls: next.length ? next : undefined });
+                    }}
+                  >×</button>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-gray-400 italic">
+            {item.status === 'queued' ? 'Add URLs to guide the research phase.' : 'No source URLs provided.'}
+          </p>
+        )}
+        {item.status === 'queued' && (
+          <form
+            className="flex gap-1.5 mt-2"
+            onSubmit={e => {
+              e.preventDefault();
+              const trimmed = newUrl.trim();
+              if (!trimmed) return;
+              try { new URL(trimmed); } catch { return; }
+              const existing = item.sourceUrls || [];
+              if (!existing.includes(trimmed)) {
+                updateQueueItem(item.id, { sourceUrls: [...existing, trimmed] });
+              }
+              setNewUrl('');
+            }}
+          >
+            <input
+              type="url"
+              className="input text-sm flex-1 font-mono"
+              placeholder="https://..."
+              value={newUrl}
+              onChange={e => setNewUrl(e.target.value)}
+            />
+            <button type="submit" className="btn-primary text-xs px-2 py-1">Add</button>
+          </form>
+        )}
+      </Section>
+
+      {/* Session stats + cost */}
       {session && (
         <Section title="Session">
           <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1.5">
-            <dt className="text-[11px] text-gray-400 font-medium">Status</dt>
-            <dd className="text-[11px] text-gray-700">{session.status}</dd>
-            <dt className="text-[11px] text-gray-400 font-medium">Builder rounds</dt>
-            <dd className="text-[11px] text-gray-700">{session.builderRounds.length}</dd>
-            <dt className="text-[11px] text-gray-400 font-medium">Audit reports</dt>
-            <dd className="text-[11px] text-gray-700">{session.auditReports.length}</dd>
-            <dt className="text-[11px] text-gray-400 font-medium">Created</dt>
-            <dd className="text-[11px] text-gray-700">{new Date(session.createdAt).toLocaleString()}</dd>
-            <dt className="text-[11px] text-gray-400 font-medium">Updated</dt>
-            <dd className="text-[11px] text-gray-700">{new Date(session.updatedAt).toLocaleString()}</dd>
+            <dt className="text-sm text-gray-400 font-medium">Status</dt>
+            <dd className="text-sm text-gray-700">{session.status}</dd>
+            <dt className="text-sm text-gray-400 font-medium">Builder rounds</dt>
+            <dd className="text-sm text-gray-700">{session.builderRounds.length}</dd>
+
+            <dt className="text-sm text-gray-400 font-medium">Created</dt>
+            <dd className="text-sm text-gray-700">{new Date(session.createdAt).toLocaleString()}</dd>
+            <dt className="text-sm text-gray-400 font-medium">Updated</dt>
+            <dd className="text-sm text-gray-700">{new Date(session.updatedAt).toLocaleString()}</dd>
+            <SessionCostRows sessionId={session.id} settings={settings} />
           </dl>
         </Section>
       )}
@@ -293,21 +325,21 @@ function InfoTab({ item, session }: { item: BatchQueueItem; session?: CandidateS
             <div className="flex items-center gap-4 text-xs">
               <div className="text-center">
                 <div className="font-bold text-gray-700">{session.provenanceSummary.totalUrls}</div>
-                <div className="text-[9px] text-gray-400">URLs</div>
+                <div className="text-sm text-gray-400">URLs</div>
               </div>
               <div className="text-center">
                 <div className="font-bold text-green-600">{session.provenanceSummary.fromInput}</div>
-                <div className="text-[9px] text-gray-400">From Input</div>
+                <div className="text-sm text-gray-400">From Input</div>
               </div>
               <div className="text-center">
                 <div className={`font-bold ${session.provenanceSummary.fabricated > 0 ? 'text-red-600' : 'text-green-600'}`}>{session.provenanceSummary.fabricated}</div>
-                <div className="text-[9px] text-gray-400">Fabricated</div>
+                <div className="text-sm text-gray-400">Fabricated</div>
               </div>
             </div>
             {session.provenanceSummary.fabricatedUrls?.length > 0 && (
               <div className="mt-2 border-t border-red-200 pt-1.5 space-y-0.5">
                 {session.provenanceSummary.fabricatedUrls.map((url, i) => (
-                  <div key={i} className="text-[9px] text-red-600 font-mono truncate">🚩 {url}</div>
+                  <div key={i} className="text-sm text-red-600 font-mono truncate">🚩 {url}</div>
                 ))}
               </div>
             )}
@@ -317,10 +349,51 @@ function InfoTab({ item, session }: { item: BatchQueueItem; session?: CandidateS
     </div>
   );
 }
+/* ─── Session cost rows (inside the Session <dl>) ──────────────────────── */
+function SessionCostRows({ sessionId, settings }: { sessionId: string; settings: any }) {
+  const actualData = getCostSummary().bySession[sessionId];
+  const estimate = useMemo(() => {
+    try { return estimateSingleRunCost(settings); } catch { return null; }
+  }, [settings]);
+
+  const fmt = (n: number) =>
+    n === 0 ? 'Free / $0.00' : `$${n.toFixed(4)}`;
+
+  return (
+    <>
+      <dt className="text-sm text-gray-400 font-medium">Est. cost</dt>
+      <dd className="text-sm text-gray-700">
+        {estimate ? `${fmt(estimate.expected)} (expected)` : '—'}
+      </dd>
+      <dt className="text-sm text-gray-400 font-medium">Actual cost</dt>
+      <dd className="text-sm text-gray-700">
+        {actualData
+          ? `${fmt(actualData.costUsd)} · ${actualData.calls} call${actualData.calls !== 1 ? 's' : ''}`
+          : 'No API calls recorded'}
+      </dd>
+    </>
+  );
+}
+/* ─── Confidence Badge ────────────────────────────── */
+
+function ConfidenceBadge({ confidence }: { confidence?: number }) {
+  if (confidence == null) return null;
+  const pct = Math.round(confidence * 100);
+  const color = confidence >= 0.8 ? 'bg-green-100 text-green-700' :
+    confidence >= 0.5 ? 'bg-yellow-100 text-yellow-700' :
+    'bg-red-100 text-red-700';
+  return (
+    <span className={`text-xs px-1 py-0.5 rounded font-bold ${color}`}>
+      {pct}%
+    </span>
+  );
+}
 
 /* ─── Draft Tab ────────────────────────────────────── */
 
 function DraftTab({ session }: { session: CandidateSession }) {
+  const [expandedStances, setExpandedStances] = React.useState<Record<string, boolean>>({});
+  const toggleStance = (key: string) => setExpandedStances(prev => ({ ...prev, [key]: !prev[key] }));
   const draft = session.currentDraft;
   if (!draft) return <p className="text-sm text-gray-400 italic">No draft yet.</p>;
 
@@ -338,10 +411,18 @@ function DraftTab({ session }: { session: CandidateSession }) {
         </div>
       )}
 
+      {/* Insufficient-data warning banner */}
+      {draft.dataWarning === 'insufficient-sources' && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
+          <span className="font-semibold">⚠ Limited data:</span> This profile was generated with little or no web research.
+          Content may be incomplete or missing. Add source URLs and rebuild for a more complete profile.
+        </div>
+      )}
+
       {/* Progress bar */}
       {draft.progress !== undefined && (
         <div>
-          <div className="flex items-center justify-between text-[10px] text-gray-400 mb-1">
+          <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
             <span>Profile Completeness</span>
             <span>{Math.round((draft.progress || 0) * 100)}%</span>
           </div>
@@ -351,51 +432,128 @@ function DraftTab({ session }: { session: CandidateSession }) {
         </div>
       )}
 
-      {/* Bios */}
+      {/* Bios — expandable with source quotes & URLs */}
       {draft.bios?.length ? (
         <Section title="Bios">
-          {draft.bios.map((bio, i) => (
-            <div key={i} className="mb-3">
-              <div className="flex items-center justify-between gap-1.5">
-                <span className="text-[9px] font-bold text-gray-400 uppercase">{bio.type}</span>
-                {bio.sourceVerified && <SourceBadgeMini status={bio.sourceVerified} />}
+          {draft.bios.map((bio, i) => {
+            const bioKey = `bio-${i}`;
+            const isBioOpen = !!expandedStances[bioKey];
+            return (
+              <div key={i} className="mb-3">
+                <div className="flex items-center justify-between gap-1.5">
+                  <span className="text-sm font-bold text-gray-400 uppercase">{bio.type}</span>
+                  <span className="flex items-center gap-1">
+                    <ConfidenceBadge confidence={bio.confidence} />
+                    {bio.sourceVerified && <SourceBadgeMini status={bio.sourceVerified} />}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap mt-0.5 max-h-[150px] overflow-y-auto">
+                  {bio.text || <span className="italic text-gray-300">Empty</span>}
+                </p>
+                {bio.sources?.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => toggleStance(bioKey)}
+                    className="mt-1 flex items-center gap-1 text-xs text-branch-600 hover:underline"
+                  >
+                    <span className="text-sm">{isBioOpen ? '▼' : '▶'}</span>
+                    {bio.sources.length} source{bio.sources.length !== 1 ? 's' : ''}
+                  </button>
+                )}
+                {isBioOpen && bio.sources?.length > 0 && (
+                  <div className="mt-1.5 space-y-1.5 pl-2">
+                    {bio.sources.map((src, k) => (
+                      <div key={k} className="border-l-2 border-branch-200 pl-2">
+                        {src.directQuote && (
+                          <blockquote className="text-xs text-gray-500 italic leading-snug mb-0.5">
+                            &ldquo;{src.directQuote}&rdquo;
+                          </blockquote>
+                        )}
+                        {src.url && (
+                          <a href={src.url} target="_blank" rel="noreferrer"
+                            className="text-xs text-branch-600 hover:underline break-all">
+                            {src.url}
+                          </a>
+                        )}
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <ConfidenceBadge confidence={src.confidence} />
+                          {src.confidenceReason && (
+                            <span className="text-sm text-gray-400">{src.confidenceReason}</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-              <p className="text-[11px] text-gray-700 leading-relaxed whitespace-pre-wrap mt-0.5 max-h-[150px] overflow-y-auto">
-                {bio.text || <span className="italic text-gray-300">Empty</span>}
-              </p>
-              {bio.sources?.length > 0 && (
-                <span className="text-[9px] text-gray-400">{bio.sources.length} source{bio.sources.length !== 1 ? 's' : ''}</span>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </Section>
       ) : null}
 
-      {/* Issues / Stances */}
+      {/* Issues / Stances — all visible, each clickable → collapsible */}
       {draft.issues?.length ? (
         <Section title={`Issues (${draft.issues.length})`}>
           {draft.issues.map((issue, i) => (
             <div key={i} className="mb-3 border-l-2 border-gray-100 pl-2.5">
               <div className="flex items-center gap-1.5">
-                <span className="text-[11px] font-semibold text-gray-700">{issue.title}</span>
+                <span className="text-sm font-semibold text-gray-700">{issue.title}</span>
                 {issue.isTopPriority && (
-                  <span className="text-[8px] bg-yellow-100 text-yellow-700 px-1 py-0.5 rounded font-bold">PRIORITY</span>
+                  <span className="text-xs bg-yellow-100 text-yellow-700 px-1 py-0.5 rounded font-bold">PRIORITY</span>
                 )}
                 {issue.complete && (
-                  <span className="text-[8px] text-green-500">✓</span>
+                  <span className="text-xs text-green-500">✓</span>
                 )}
               </div>
               {issue.stances?.length > 0 && (
                 <div className="mt-1 space-y-1">
-                  {issue.stances.slice(0, 3).map((s, j) => (
-                    <div key={j} className="flex items-start gap-1">
-                      <p className="text-[10px] text-gray-500 leading-relaxed line-clamp-2 flex-1">{s.text}</p>
-                      {s.sourceVerified && <SourceBadgeMini status={s.sourceVerified} />}
-                    </div>
-                  ))}
-                  {issue.stances.length > 3 && (
-                    <span className="text-[9px] text-gray-400">+{issue.stances.length - 3} more</span>
-                  )}
+                  {issue.stances.map((s, j) => {
+                    const key = `${i}-${j}`;
+                    const isOpen = !!expandedStances[key];
+                    return (
+                      <div key={j} className="rounded border border-transparent hover:border-gray-200 transition-colors">
+                        <button
+                          type="button"
+                          onClick={() => toggleStance(key)}
+                          className="w-full flex items-start gap-1 text-left py-0.5 px-1 rounded"
+                        >
+                          <span className="text-sm text-gray-300 mt-0.5 shrink-0">{isOpen ? '▼' : '▶'}</span>
+                          <p className={`text-xs text-gray-500 leading-relaxed flex-1 ${isOpen ? '' : 'line-clamp-2'}`}>{s.text}</p>
+                          <span className="shrink-0 flex items-center gap-1">
+                            <ConfidenceBadge confidence={s.confidence} />
+                            {s.sourceVerified && <SourceBadgeMini status={s.sourceVerified} />}
+                          </span>
+                        </button>
+                        {isOpen && (
+                          <div className="pl-4 pr-1 pb-2 space-y-1.5">
+                            {s.sources?.length > 0 ? s.sources.map((src, k) => (
+                              <div key={k} className="border-l-2 border-branch-200 pl-2">
+                                {src.directQuote && (
+                                  <blockquote className="text-sm text-gray-500 italic leading-snug border-l-0 pl-0 mb-0.5">
+                                    "{src.directQuote}"
+                                  </blockquote>
+                                )}
+                                {src.url && (
+                                  <a href={src.url} target="_blank" rel="noreferrer"
+                                    className="text-sm text-branch-600 hover:underline break-all">
+                                    {src.url}
+                                  </a>
+                                )}
+                                <div className="flex items-center gap-1 mt-0.5">
+                                  <ConfidenceBadge confidence={src.confidence} />
+                                  {src.confidenceReason && (
+                                    <span className="text-xs text-gray-400">{src.confidenceReason}</span>
+                                  )}
+                                </div>
+                              </div>
+                            )) : (
+                              <span className="text-sm text-gray-400 italic">No sources cited</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -403,15 +561,107 @@ function DraftTab({ session }: { session: CandidateSession }) {
         </Section>
       ) : null}
 
+      {/* Articles & Sources — all unique cited URLs */}
+      {(() => {
+        const allSources = new Map<string, { url: string; quote?: string; title?: string }>();
+        for (const bio of draft.bios || []) {
+          for (const s of bio.sources || []) {
+            if (s.url && !allSources.has(s.url)) allSources.set(s.url, { url: s.url, quote: s.directQuote, title: s.title });
+          }
+        }
+        for (const issue of draft.issues || []) {
+          for (const stance of issue.stances || []) {
+            for (const s of stance.sources || []) {
+              if (s.url && !allSources.has(s.url)) allSources.set(s.url, { url: s.url, quote: s.directQuote, title: s.title });
+            }
+          }
+        }
+        const articles = [...allSources.values()];
+        if (articles.length === 0) return null;
+        return (
+          <Section title={`Articles & Sources (${articles.length})`}>
+            <div className="space-y-1.5">
+              {articles.map((art, i) => {
+                let domain = '';
+                try { domain = new URL(art.url).hostname.replace('www.', ''); } catch {}
+                return (
+                  <a key={i} href={art.url} target="_blank" rel="noreferrer"
+                    className="flex items-start gap-2 p-1.5 rounded hover:bg-gray-50 transition-colors group">
+                    <span className="text-xs text-gray-400 shrink-0 mt-0.5">📄</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm text-gray-700 group-hover:underline truncate">
+                        {art.title || domain || art.url}
+                      </div>
+                      <div className="text-sm text-gray-400 font-mono truncate">{domain}</div>
+                    </div>
+                    <span className="text-sm text-gray-300 shrink-0">↗</span>
+                  </a>
+                );
+              })}
+            </div>
+          </Section>
+        );
+      })()}
+
       {/* Links */}
       {draft.links?.length ? (
         <Section title={`Links (${draft.links.length})`}>
-          <div className="space-y-1">
-            {draft.links.map((link, i) => (
-              <div key={i} className="flex items-center gap-1.5 text-[10px]">
+          <div className="space-y-2">
+            {/* Campaign website featured at top */}
+            {(() => {
+              const campaign = draft.links.find(l =>
+                l.mediaType === 'website' ||
+                l.url?.includes('campaign') || l.url?.includes('.com')
+              );
+              if (!campaign) return null;
+              return (
+                <a href={campaign.url} target="_blank" rel="noreferrer"
+                  className="flex items-center gap-2 p-2 rounded-lg border border-branch-200 bg-branch-50/50 hover:bg-branch-50 transition-colors group">
+                  <span className="text-lg">🌐</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold text-branch-700 group-hover:underline truncate">
+                      {campaign.title || campaign.url}
+                    </div>
+                    <div className="text-sm text-branch-500 font-mono truncate">{campaign.url}</div>
+                  </div>
+                  <span className="text-sm text-branch-400">↗</span>
+                </a>
+              );
+            })()}
+            {/* Social media with platform icons */}
+            {draft.links.filter(l => ['twitter', 'facebook', 'instagram', 'youtube', 'linkedin', 'tiktok'].includes(l.mediaType)).length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {draft.links.filter(l => ['twitter', 'facebook', 'instagram', 'youtube', 'linkedin', 'tiktok'].includes(l.mediaType)).map((link, i) => {
+                  const icons: Record<string, string> = {
+                    twitter: '𝕏', facebook: 'f', instagram: '📷', youtube: '▶',
+                    linkedin: 'in', tiktok: '♪',
+                  };
+                  const colors: Record<string, string> = {
+                    twitter: 'bg-gray-900 text-white', facebook: 'bg-blue-600 text-white',
+                    instagram: 'bg-gradient-to-br from-purple-600 to-orange-500 text-white',
+                    youtube: 'bg-red-600 text-white', linkedin: 'bg-blue-700 text-white',
+                    tiktok: 'bg-gray-900 text-white',
+                  };
+                  return (
+                    <a key={i} href={link.url} target="_blank" rel="noreferrer"
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium hover:opacity-80 transition-opacity ${colors[link.mediaType] || 'bg-gray-100 text-gray-600'}`}>
+                      <span className="text-xs font-bold">{icons[link.mediaType] || '🔗'}</span>
+                      <span className="capitalize">{link.mediaType}</span>
+                    </a>
+                  );
+                })}
+              </div>
+            )}
+            {/* Other links */}
+            {draft.links.filter(l => {
+              const social = ['twitter', 'facebook', 'instagram', 'youtube', 'linkedin', 'tiktok'];
+              const isCampaign = l.mediaType === 'website';
+              return !social.includes(l.mediaType) && !isCampaign;
+            }).map((link, i) => (
+              <div key={i} className="flex items-center gap-1.5 text-xs">
                 <span className="text-gray-400 shrink-0 capitalize">{link.mediaType}</span>
                 <a href={link.url} target="_blank" rel="noreferrer" className="text-branch-600 hover:underline truncate">
-                  {link.title || link.url}
+                  {link.title || (() => { try { return new URL(link.url).hostname; } catch { return link.url; } })()}
                 </a>
               </div>
             ))}
@@ -428,124 +678,85 @@ function DraftTab({ session }: { session: CandidateSession }) {
 
 /* ─── Log Tab ──────────────────────────────────────── */
 
+const URL_RE = /https?:\/\/[^\s)"'<>\]]+/g;
+
+function LogLine({ line }: { line: string }) {
+  const parts: React.ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  URL_RE.lastIndex = 0;
+  while ((m = URL_RE.exec(line)) !== null) {
+    if (m.index > last) parts.push(line.slice(last, m.index));
+    parts.push(
+      <a key={m.index} href={m[0]} target="_blank" rel="noreferrer"
+        className="underline opacity-80 hover:opacity-100 break-all">
+        {m[0]}
+      </a>
+    );
+    last = m.index + m[0].length;
+  }
+  if (last < line.length) parts.push(line.slice(last));
+  return <>{parts}</>;
+}
+
 function LogTab({ session }: { session: CandidateSession }) {
   const log = session.buildLog;
-  if (!log?.length) return <p className="text-sm text-gray-400 italic">No build log.</p>;
+  const logEndRef = React.useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom when new log entries appear
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [log?.length]);
+
+  const handleDownloadLog = useCallback(() => {
+    if (!log?.length) return;
+    const content = exportBuildLog(log, session.candidateName);
+    downloadFile(content, `${safeName(session.candidateName)}_build_log.txt`, 'text/plain');
+  }, [log, session.candidateName]);
+
+  if (!log?.length) return (
+    <div className="flex flex-col items-center justify-center h-32 text-center">
+      <div className="animate-pulse text-gray-400 text-sm">Waiting for log output…</div>
+      <div className="text-xs text-gray-300 mt-1">Log will appear here when processing starts</div>
+    </div>
+  );
 
   return (
-    <div className="bg-gray-900 rounded-lg p-3 font-mono text-[11px] leading-relaxed max-h-[calc(100vh-280px)] overflow-y-auto">
+    <div>
+      <div className="flex justify-end mb-2">
+        <button
+          onClick={handleDownloadLog}
+          className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 rounded px-2.5 py-1 transition-colors"
+        >
+          <span>⬇</span> Save as TXT
+        </button>
+      </div>
+      <div className="bg-gray-900 rounded-lg p-3 font-mono text-sm leading-relaxed max-h-[calc(100vh-310px)] overflow-y-auto">
       {log.map((line, i) => (
         <div key={i} className={
           line.includes('✅') ? 'text-green-400' :
           line.includes('❌') ? 'text-red-400' :
           line.includes('⚠') ? 'text-yellow-400' :
+          line.includes('🌐') || line.includes('📎') ? 'text-sky-400' :
+          line.includes('🚩') ? 'text-red-400' :
+          line.includes('🔍') || line.includes('🔎') ? 'text-purple-400' :
           'text-gray-300'
-        }>{line}</div>
+        }><LogLine line={line} /></div>
       ))}
+      <div ref={logEndRef} />
+      </div>
     </div>
   );
 }
 
 /* ─── Audit Tab ────────────────────────────────────── */
 
-function AuditTab({ session }: { session: CandidateSession }) {
-  const reports = session.auditReports;
-  if (!reports?.length) return <p className="text-sm text-gray-400 italic">No audit reports.</p>;
-
-  const latest = reports[reports.length - 1];
-  const { summary, results } = latest;
-
-  return (
-    <div className="space-y-4">
-      {/* Summary row */}
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-1.5">
-          <span className="text-green-600 font-bold text-sm">{summary.verified}</span>
-          <span className="text-[10px] text-gray-400">verified</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="text-red-600 font-bold text-sm">{summary.contradicted}</span>
-          <span className="text-[10px] text-gray-400">contradicted</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="text-gray-500 font-bold text-sm">{summary.unverified}</span>
-          <span className="text-[10px] text-gray-400">unverified</span>
-        </div>
-        <div className="ml-auto text-xs text-gray-400">
-          Confidence: <span className="font-semibold text-gray-600">{Math.round(summary.overallConfidence * 100)}%</span>
-        </div>
-      </div>
-
-      {/* Claim list */}
-      <div className="space-y-2">
-        {results.map((r, i) => (
-          <div key={i} className={`rounded-lg border p-3 text-[11px] ${
-            r.consensus === 'verified' ? 'border-green-200 bg-green-50/50' :
-            r.consensus === 'contradicted' ? 'border-red-200 bg-red-50/50' :
-            'border-gray-200 bg-gray-50/50'
-          }`}>
-            <div className="flex items-start justify-between gap-2">
-              <p className="text-gray-800 font-medium flex-1">{r.claim.text}</p>
-              <div className="flex items-center gap-1 shrink-0">
-                {r.identityMismatch && (
-                  <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-red-100 text-red-700">
-                    ⚠ Mismatch
-                  </span>
-                )}
-                {r.needsHumanReview && !r.identityMismatch && (
-                  <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-yellow-100 text-yellow-700">
-                    👀 Review
-                  </span>
-                )}
-                {r.urlValidation && (
-                  <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${
-                    !r.urlValidation.exists ? 'bg-red-100 text-red-700' :
-                    r.urlValidation.quoteFound ? 'bg-green-100 text-green-700' :
-                    'bg-yellow-100 text-yellow-700'
-                  }`}>
-                    {!r.urlValidation.exists ? '🚩 Dead' :
-                     r.urlValidation.quoteFound ? '✓ Quote' : '⚠ No Quote'}
-                  </span>
-                )}
-                {r.userOverride === 'flip' && (
-                  <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-indigo-100 text-indigo-700">
-                    ↔ Human
-                  </span>
-                )}
-                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                  r.consensus === 'verified' ? 'bg-green-100 text-green-700' :
-                  r.consensus === 'contradicted' ? 'bg-red-100 text-red-700' :
-                  'bg-gray-100 text-gray-600'
-                }`}>
-                  {r.consensus}
-                </span>
-              </div>
-            </div>
-            {r.explanation && (
-              <p className="text-gray-500 mt-1">{r.explanation}</p>
-            )}
-            {r.userNote && (
-              <p className="text-[10px] text-indigo-700 mt-1 bg-indigo-50 border border-indigo-100 rounded px-2 py-1">Reviewer note: {r.userNote}</p>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {reports.length > 1 && (
-        <p className="text-[10px] text-gray-400 italic">
-          Showing latest report. {reports.length} total audit runs.
-        </p>
-      )}
-    </div>
-  );
-}
-
 /* ═══════════════════ REUSABLE PANEL PIECES ═══════════════════════════════ */
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">{title}</h4>
+      <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5">{title}</h4>
       {children}
     </div>
   );
@@ -562,7 +773,7 @@ function SourceBadgeMini({ status }: { status: 'verified' | 'unverifiable' | 'fa
     verified: '✓', unverifiable: '?', fabricated: '🚩', 'not-in-input': '○',
   };
   return (
-    <span className={`shrink-0 text-[8px] font-bold px-1 py-0.5 rounded whitespace-nowrap ${styles[status] || 'bg-gray-100 text-gray-500'}`}
+    <span className={`shrink-0 text-xs font-bold px-1 py-0.5 rounded whitespace-nowrap ${styles[status] || 'bg-gray-100 text-gray-500'}`}
       title={status}>
       {icons[status] || '·'}
     </span>

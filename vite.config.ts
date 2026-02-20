@@ -12,4 +12,14 @@ export default defineConfig({
   define: {
     'process.env': {},
   },
+  server: {
+    proxy: {
+      // DuckDuckGo proxy — bypasses CORS during development
+      '/api/ddg': {
+        target: 'https://html.duckduckgo.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/ddg/, '/html/'),
+      },
+    },
+  },
 });
