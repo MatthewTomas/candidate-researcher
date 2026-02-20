@@ -33,7 +33,7 @@ interface HistoryPanelProps {
 }
 
 export default function HistoryPanel({ onSelect }: HistoryPanelProps) {
-  const { batchQueue, sessions, showToast } = useApp();
+  const { batchQueue, setBatchQueue, sessions, showToast } = useApp();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Completed items from queue
@@ -93,6 +93,21 @@ export default function HistoryPanel({ onSelect }: HistoryPanelProps) {
     setSelectedIds(new Set());
   }, [allItems, selectedIds, sessions, showToast]);
 
+  const handleBulkRequeue = useCallback(() => {
+    const selected = [...selectedIds].filter(id => {
+      const item = allItems.find(i => i.id === id);
+      return item && !item.id.startsWith('synthetic-'); // only re-queue actual queue items
+    });
+    if (selected.length === 0) return;
+    setBatchQueue(prev => prev.map(i =>
+      selected.includes(i.id)
+        ? { ...i, status: 'queued' as BatchItemStatus, error: undefined, startedAt: undefined, completedAt: undefined }
+        : i
+    ));
+    showToast(`Re-queued ${selected.length} item(s)`, 'success');
+    setSelectedIds(new Set());
+  }, [allItems, selectedIds, setBatchQueue, showToast]);
+
   const selectedCompleted = [...selectedIds].filter(id => allItems.find(i => i.id === id));
 
   return (
@@ -114,6 +129,12 @@ export default function HistoryPanel({ onSelect }: HistoryPanelProps) {
               onClick={handleBulkExport}
             >
               Export JSON
+            </button>
+            <button
+              className="text-xs font-medium text-amber-600 hover:text-amber-700 px-1.5 py-0.5 rounded hover:bg-amber-50"
+              onClick={handleBulkRequeue}
+            >
+              Re-queue
             </button>
           </div>
         )}

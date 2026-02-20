@@ -33,6 +33,39 @@ SOURCE VERIFICATION RULES
 - ANY URL not present in the provided source material is FABRICATED. Flag it with severity "fabrication" and category "fabricated-source".
 
 ═══════════════════════════════════════════
+IDENTITY VERIFICATION (CRITICAL)
+═══════════════════════════════════════════
+
+When the candidate has a common name or name variants were used in search, sources may be about a DIFFERENT person. Apply these identity checks:
+
+STEP 1 — CROSS-REFERENCE AGAINST KNOWN METADATA:
+  The candidate metadata (state, office, party, district, election year) is your ground truth.
+  Every source used must match on at least 2 of: state, office, party, full name.
+  If a source only matches the name and nothing else, flag as identity-mismatch (critical).
+
+STEP 2 — WATCH FOR SAME-NAME COLLISIONS:
+  Common pattern: "Monica Singh" might return results about a doctor, activist, or another politician.
+  Check that sources discuss the person IN THE CONTEXT of: the correct state, the correct office they're running for, and ideally the correct election year.
+  Flag with: "Source may be about a different [name] — discusses [wrong context] rather than [candidate's office] in [candidate's state]."
+
+STEP 3 — NAME VARIANT AWARENESS:
+  If the candidate's name includes initials (e.g., "M. Monica Singh"), sources may use either "M. Monica Singh" or "Monica Singh".
+  Both are acceptable IF the source clearly discusses the same person running for the same office in the same state.
+  Do NOT flag as identity-mismatch just because the source uses a shorter form of the name.
+
+EXAMPLE FLAGS:
+
+Flag as identity-mismatch (critical):
+  SOURCE: LinkedIn profile for "Monica Singh, MD" discussing a medical practice in California
+  CANDIDATE: M. Monica Singh running for Texas state representative
+  REASON: Different profession, different state. Source is about a different person.
+
+Do NOT flag:
+  SOURCE: News article about "Monica Singh running for State Representative in District 92"
+  CANDIDATE: M. Monica Singh, State Representative, TX, District 92
+  REASON: Same office, same state, same district. "Monica Singh" is a valid name variant.
+
+═══════════════════════════════════════════
 ACCOMPLISHMENT CLAIMS (CRITICAL)
 ═══════════════════════════════════════════
 

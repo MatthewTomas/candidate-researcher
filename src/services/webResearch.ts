@@ -326,15 +326,42 @@ function buildSearchQueries(name: string, meta?: CandidateMetadata): string[] {
   const partyLabel = party === 'R' ? 'Republican' : party === 'D' ? 'Democrat' :
     party === 'L' ? 'Libertarian' : party === 'G' ? 'Green' : party === 'I' ? 'Independent' : '';
 
-  // Handle middle initials: "Donald M. Brown" → also search "Donald Brown"
-  const nameWithoutMiddle = name.replace(/\s+[A-Z]\.?\s+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  // ── Smart name variant generation ──
+  // Handles: leading initials ("M. Monica Singh"), middle initials ("Donald M. Brown"),
+  // suffixes ("Jr.", "III"), and first+last-only fallbacks.
   const nameVariants = [name];
-  if (nameWithoutMiddle !== name) nameVariants.push(nameWithoutMiddle);
+  const suffixPattern = /\s+(?:Jr\.?|Sr\.?|II|III|IV|V|Esq\.?|Ph\.?D\.?)$/i;
+  const nameWithoutSuffix = name.replace(suffixPattern, '').trim();
+  if (nameWithoutSuffix !== name) nameVariants.push(nameWithoutSuffix);
 
-  // Extract first and last name for broader searches
-  const nameParts = name.split(/\s+/);
-  const firstName = nameParts[0] || '';
-  const lastName = nameParts[nameParts.length - 1] || '';
+  const parts = nameWithoutSuffix.split(/\s+/);
+
+  // Detect leading initial: "M. Monica Singh" → "Monica Singh"
+  if (parts.length >= 2 && /^[A-Z]\.?$/.test(parts[0])) {
+    const withoutLeadingInitial = parts.slice(1).join(' ');
+    if (!nameVariants.includes(withoutLeadingInitial)) nameVariants.push(withoutLeadingInitial);
+  }
+
+  // Detect middle initial(s): "Donald M. Brown" → "Donald Brown"
+  const nameWithoutMiddle = nameWithoutSuffix.replace(/\s+[A-Z]\.?\s+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  if (nameWithoutMiddle !== nameWithoutSuffix && !nameVariants.includes(nameWithoutMiddle)) {
+    nameVariants.push(nameWithoutMiddle);
+  }
+
+  // Combined: strip both leading initial AND middle initials if present
+  if (parts.length >= 3 && /^[A-Z]\.?$/.test(parts[0])) {
+    const afterLeading = parts.slice(1);
+    const combined = afterLeading.filter(p => !/^[A-Z]\.?$/.test(p)).join(' ');
+    if (combined && !nameVariants.includes(combined)) nameVariants.push(combined);
+  }
+
+  // First + Last only (skip all middle parts): "Mary Catherine O'Brien" → "Mary O'Brien"
+  const firstName = parts[0] || '';
+  const lastName = parts[parts.length - 1] || '';
+  if (parts.length > 2) {
+    const firstLast = `${firstName} ${lastName}`;
+    if (!nameVariants.includes(firstLast)) nameVariants.push(firstLast);
+  }
 
   // ── Core identity queries (use all name variants) ──
   for (const n of nameVariants) {
@@ -399,16 +426,18 @@ function buildSearchQueries(name: string, meta?: CandidateMetadata): string[] {
   }
 
   // ── Broader unquoted searches (catches partial name matches and variant spellings) ──
-  queries.push(`${name} ${office} ${state} ${electionYear}`.trim());
-  if (nameWithoutMiddle !== name) {
-    queries.push(`${nameWithoutMiddle} ${office} ${state} ${electionYear}`.trim());
+  for (const n of nameVariants) {
+    queries.push(`${n} ${office} ${state} ${electionYear}`.trim());
+  }
+  // First+last only unquoted (broadest match)
+  if (parts.length > 2) {
+    queries.push(`${firstName} ${lastName} ${office} ${state} ${electionYear}`.trim());
   }
 
   // ── Government / official record searches ──
   if (office && state) {
-    queries.push(`"${name}" "${office}" "${state}" ${electionYear}`.trim());
-    if (nameWithoutMiddle !== name) {
-      queries.push(`"${nameWithoutMiddle}" "${office}" "${state}" ${electionYear}`.trim());
+    for (const n of nameVariants) {
+      queries.push(`"${n}" "${office}" "${state}" ${electionYear}`.trim());
     }
     // State legislature / court records
     if (office.toLowerCase().includes('judge') || office.toLowerCase().includes('justice') || office.toLowerCase().includes('court')) {
@@ -534,6 +563,21 @@ export async function researchCandidate(
   // 1. Build queries
   const queries = buildSearchQueries(name, metadata);
   log(`🔎 Research phase: ${queries.length} search queries prepared (via ${actualProvider})`);
+
+  // Log the name variants discovered for debugging search issues
+  const variantCheck = (() => {
+    const parts = name.split(/\s+/);
+    const variants = [name];
+    const suffixPattern = /\s+(?:Jr\.?|Sr\.?|II|III|IV|V|Esq\.?|Ph\.?D\.?)$/i;
+    const noSuffix = name.replace(suffixPattern, '').trim();
+    if (noSuffix !== name) variants.push(noSuffix);
+    const p = noSuffix.split(/\s+/);
+    if (p.length >= 2 && /^[A-Z]\.?$/.test(p[0])) variants.push(p.slice(1).join(' '));
+    return variants;
+  })();
+  if (variantCheck.length > 1) {
+    log(`   📝 Name variants: ${variantCheck.join(', ')}`);
+  }
 
   // 2. Run searches with retry logic & exponential backoff
   let allSearchResults: SearchResult[] = [];

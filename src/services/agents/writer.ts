@@ -483,22 +483,55 @@ Return JSON with ONLY these fields:
   ]
 }
 
-BIO FORMAT — STRICT RULES WITH EXAMPLES:
+═══════════════════════════════════════════
+BIO FORMAT — STRICT RULES (MUST FOLLOW EXACTLY)
+═══════════════════════════════════════════
 
-PERSONAL BIO: Follow this exact pattern: Origin → Education → Family/Location.
+PERSONAL BIO: Origin → Education → Family/Location.
   GOOD: "Maria Elena Garcia was raised in San Antonio. She earned a bachelor's degree in criminal justice from the University of Texas at San Antonio and a law degree from St. Mary's University School of Law. She has three children."
   BAD (too long, narrative, includes job info): "Maria Elena Garcia is a dedicated public servant who has spent decades fighting for justice in Bexar County. She was born and raised in San Antonio, Texas, where she developed a passion for law enforcement. She graduated from the University of Texas with a Bachelor of Arts in Criminal Justice..."
   RULES: Full name on FIRST mention only. Lowercase degrees. Number of children, NOT names. 2-3 sentences max. No job descriptions — that's for professional bio.
 
-PROFESSIONAL BIO: Current job title ONLY. ONE sentence.
+PROFESSIONAL BIO: Current job title and employer ONLY. ONE sentence. Past non-political jobs listed without dates or descriptions.
   GOOD: "Maria is a prosecutor in the Bexar County District Attorney's Office."
-  BAD: "Maria has served as a prosecutor for over 15 years, handling complex felony cases and mentoring junior attorneys."
-  RULES: First name only. NO dates. NO descriptions of duties. NO past accomplishments. NO volunteer work. Just the current title and employer.
+  GOOD: "John is a partner at Smith & Associates. He previously worked as an assistant district attorney."
+  BAD (includes elected positions): "Maria is a prosecutor and currently serves as a county commissioner."
+  BAD (includes dates): "Maria has served as a prosecutor since 2015."
+  BAD (includes duties): "Maria is a prosecutor handling complex felony cases and mentoring junior attorneys."
 
-POLITICAL BIO: Elected positions only, reverse chronological.
+  *** CRITICAL: The professional bio must NEVER include elected offices, political positions, government appointments, or any role obtained through election or political appointment. Those belong ONLY in the political bio. ***
+  *** If a candidate's only job is an elected position (e.g., full-time mayor), the professional bio should describe what they did BEFORE holding office, or state their pre-office profession. ***
+
+POLITICAL BIO: Elected positions only, reverse chronological. MUST include the year first elected and term information where available.
   GOOD: "Maria ran for Bexar County district attorney in 2024 but did not win. She was elected to the San Antonio City Council District 5 seat in 2018."
-  BAD: "Maria is a well-known community leader who has been involved in local politics for many years. She serves on several boards and committees, and ran for District Attorney..."
-  RULES: First name only. Only ELECTED government positions. Reverse chronological. No appointed positions, board memberships, or community roles. If no elected positions, write "As of February 2026, [first name] has not held elected office."
+  GOOD: "John has served as state representative for District 42 since 2020. He was re-elected in 2022. He previously served on the Dallas City Council from 2016 to 2020."
+  BAD (missing years): "Maria serves on the city council and ran for district attorney."
+  BAD (includes non-elected roles): "Maria is a well-known community leader who has been involved in local politics for many years. She serves on several boards and committees."
+  BAD (missing term info): "John is a state representative." (Should include year elected and district)
+
+  *** CRITICAL: Every elected position mentioned MUST include the year first elected/appointed. Terms served (if re-elected) must be noted. If the candidate has not held elected office, write: "As of February 2026, [first name] has not held elected office." ***
+  *** NEVER include board memberships, committee assignments, community leadership roles, or appointed (non-elected) positions in the political bio. ***
+
+═══════════════════════════════════════════
+CROSS-CONTAMINATION PREVENTION (MUST FOLLOW)
+═══════════════════════════════════════════
+
+Each bio type has a STRICT lane. Content MUST NOT leak between sections:
+
+| Content Type | Personal | Professional | Political |
+|---|---|---|---|
+| Where raised / hometown | ✅ | ❌ | ❌ |
+| Education / degrees | ✅ | ❌ | ❌ |
+| Family / children | ✅ | ❌ | ❌ |
+| Current residence | ✅ | ❌ | ❌ |
+| Job title / employer | ❌ | ✅ | ❌ |
+| Past non-political jobs | ❌ | ✅ | ❌ |
+| Elected offices held | ❌ | ❌ | ✅ |
+| Election results (won/lost) | ❌ | ❌ | ✅ |
+| Year elected / terms served | ❌ | ❌ | ✅ |
+| Campaign activity | ❌ | ❌ | ✅ |
+
+If an item could go in multiple sections, put it in ONLY the section marked ✅ above.
 
 ADDITIONAL RULES:
 - Every claim needs a source with a "directQuote" that can be found with CMD+F on the source page.

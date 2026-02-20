@@ -184,8 +184,11 @@ export default function ProcessingPanel({ onSelect }: ProcessingPanelProps) {
           { getProvider, getTrackedProvider },
           {
             onStatusChange: (status) => {
+              // Don't overwrite paused/queued status — the user explicitly set those
               setBatchQueue(prev => prev.map(i =>
-                i.id === item.id ? { ...i, status: status as BatchItemStatus } : i
+                i.id === item.id && i.status !== 'paused' && i.status !== 'queued'
+                  ? { ...i, status: status as BatchItemStatus }
+                  : i
               ));
             },
             onLog: (msg) => addCandidateLog(`[${item.candidateName}] ${msg}`),
@@ -199,17 +202,20 @@ export default function ProcessingPanel({ onSelect }: ProcessingPanelProps) {
         if (logFlushTimer) clearTimeout(logFlushTimer);
         flushLog();
 
-        // Mark complete
-        setBatchQueue(prev => prev.map(i =>
-          i.id === item.id
-            ? { ...i, status: 'complete' as BatchItemStatus, completedAt: new Date().toISOString() }
-            : i
-        ));
+        // Mark complete — but respect pause/re-queue if user changed status mid-pipeline
+        setBatchQueue(prev => prev.map(i => {
+          if (i.id !== item.id) return i;
+          if (i.status === 'paused' || i.status === 'queued') return i; // user paused or re-queued — don't overwrite
+          return { ...i, status: 'complete' as BatchItemStatus, completedAt: new Date().toISOString() };
+        }));
         addCandidateLog(`[${item.candidateName}] ✅ Complete`);
       } catch (err: any) {
-        setBatchQueue(prev => prev.map(i =>
-          i.id === item.id ? { ...i, status: 'error' as BatchItemStatus, error: err.message } : i
-        ));
+        // Mark error — but respect pause/re-queue
+        setBatchQueue(prev => prev.map(i => {
+          if (i.id !== item.id) return i;
+          if (i.status === 'paused' || i.status === 'queued') return i;
+          return { ...i, status: 'error' as BatchItemStatus, error: err.message };
+        }));
         addCandidateLog(`[${item.candidateName}] ❌ Error: ${err.message}`);
         if (logFlushTimer) clearTimeout(logFlushTimer);
         if (latestSession) {

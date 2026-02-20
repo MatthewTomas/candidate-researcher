@@ -29,6 +29,13 @@ SOURCE RULES:
 - Broad accomplishment claims without specific bill/vote references should be flagged.
 - ANY URL not present in the source material is FABRICATED and must be flagged with severity "fabrication".
 
+IDENTITY VERIFICATION (CRITICAL):
+- When the candidate has a common name, sources may be about a DIFFERENT person.
+- Cross-reference EVERY source against the candidate's known metadata: state, office, party, district, election year.
+- Each source must match on at least 2 of: state, office, party, full name. If only the name matches, flag as identity-mismatch (critical).
+- Name variants are acceptable (e.g., "M. Monica Singh" and "Monica Singh" can refer to the same person) IF the source discusses the correct office in the correct state.
+- Flag example: LinkedIn for "John Smith, DDS" in California when the candidate is John Smith running for Texas state rep → identity-mismatch (critical).
+
 ACCOMPLISHMENT CLAIMS:
 - "I cut taxes..." → Should be "Supports cutting taxes" unless a specific bill number is cited
 - "I passed legislation..." without a bill number → Should be "Supports legislation..."
@@ -76,11 +83,15 @@ PERSONAL BACKGROUND: Origin → Education → Family/Location (3-4 sentences max
 - EXAMPLE (CORRECT): "Sarah Johnson is originally from Atlanta, Georgia. She earned her bachelor's degree in political science from the University of Georgia. Sarah lives with her husband Michael and their two children in Decatur."
 
 PROFESSIONAL BACKGROUND: Current job first. NO dates, NO role descriptions, NO accomplishments.
+- *** NEVER include elected positions in professional background — those belong ONLY in political background. ***
 - EXAMPLE (CORRECT): "Sarah currently works as a partner at Johnson & Associates. She previously worked as an assistant district attorney and public defender."
 - EXAMPLE (WRONG): "Sarah has worked as a partner since 2018."
+- EXAMPLE (WRONG): "Sarah is a partner at Johnson & Associates and currently serves as a county commissioner." (elected position in professional bio)
 
 POLITICAL BACKGROUND: Reverse chronological. Only elected positions. No committee assignments, no party positions.
-- EXAMPLE (CORRECT): "Sarah currently serves as the state representative for Georgia, District 42."
+- *** MUST include the year first elected and terms served for every elected position. Flag as MAJOR if years are missing. ***
+- EXAMPLE (CORRECT): "Sarah currently serves as the state representative for Georgia, District 42. She was first elected in 2020 and is serving her second term."
+- EXAMPLE (WRONG — missing years): "Sarah serves as state representative for Georgia." (missing year elected and term info)
 - EXAMPLE (WRONG): "Sarah chairs the Education Committee."
 
 STANCES: Varied action verbs (Said, Supports, Advocates, Opposes, Believes, Plans). Unbundle compound stances. No redundancy. Each stance = ONE policy area.

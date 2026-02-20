@@ -71,11 +71,15 @@ CHECK FOR:
 - NO past accomplishments (flag any achievement or success claims)
 - Volunteer positions NOT here (should be in Personal Background)
 - Uses first name only (not full name)
+- *** CRITICAL: NO elected positions, political offices, or government appointments obtained through election. Those belong ONLY in Political Background. ***
+  - Flag as MAJOR if professional bio mentions: city council, state representative, senator, commissioner, judge (elected), mayor, school board, or any other elected office.
+  - Example flag: "Professional background includes elected position 'county commissioner' — move to Political Background."
 
 EXAMPLE (CORRECT): "Sarah currently works as a partner at Johnson & Associates Law Firm. She previously worked as an assistant district attorney and public defender."
 EXAMPLE (WRONG — dates): "Sarah has worked as a partner at Johnson & Associates since 2018."
 EXAMPLE (WRONG — role description): "Sarah currently works as a partner at Johnson & Associates where she manages client relationships and oversees litigation strategy."
 EXAMPLE (WRONG — accomplishments): "Sarah currently works as a partner at Johnson & Associates, where she has won over 200 cases."
+EXAMPLE (WRONG — elected position): "Sarah is a partner at Johnson & Associates and currently serves as a county commissioner." (county commissioner is elected — must be in Political Background only)
 
 ═══════════════════════════════════════════
 POLITICAL BACKGROUND
@@ -84,15 +88,20 @@ POLITICAL BACKGROUND
 CHECK FOR:
 - Reverse chronological order — current position FIRST
 - ONLY elected government positions included
+- *** CRITICAL: MUST include the YEAR first elected and terms served (if re-elected) for every elected position. Flag as MAJOR if years are missing. ***
 - Appointments NOT counted as elected terms
 - Party positions excluded (majority leader, precinct delegate, etc.)
 - Committee assignments excluded
 - Uses first name only (not full name, unless no Personal or Professional info exists)
 - Follows the template phrasing: "currently serves as the [position] for [State, District #]"
+- If candidate has no elected office: "As of February 2026, [first name] has not held elected office."
 
 EXAMPLE (CORRECT): "Sarah currently serves as the state representative for Georgia, District 42. She was first elected in 2020 and is serving her second term."
+EXAMPLE (CORRECT — lost race included): "John ran for state senate in 2022 but did not win. He was elected to the Lakewood City Council in 2018 and served one term."
+EXAMPLE (WRONG — missing years): "Sarah serves as the state representative for Georgia." (Flag: "Missing year first elected and term information.")
 EXAMPLE (WRONG — committee included): "Sarah currently serves as the state representative for Georgia, District 42, where she chairs the Education Committee."
 EXAMPLE (WRONG — party position): "Sarah serves as the minority leader in the Georgia House."
+EXAMPLE (WRONG — no term info): "John is a city council member." (Flag: "Missing year elected, district, and term information.")
 
 ═══════════════════════════════════════════
 ISSUE STANCES
