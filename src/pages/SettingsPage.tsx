@@ -657,6 +657,31 @@ export default function SettingsPage() {
                   </div>
                 </div>
               )}
+
+              {/* Private CORS proxy — recommended for production to avoid public proxy rate limits */}
+              <div className="pt-1 border-t border-gray-100">
+                <label className="text-xs font-medium text-gray-600 mb-1 block">
+                  🔒 Private CORS Proxy URL <span className="text-gray-400 font-normal">(optional, production)</span>
+                </label>
+                <input
+                  type="text"
+                  className="input text-sm w-full font-mono"
+                  placeholder="https://your-worker.example.com/?url="
+                  autoComplete="off"
+                  data-1p-ignore
+                  data-lpignore="true"
+                  value={settings.corsProxyUrl || ''}
+                  onChange={e => updateSettings({ corsProxyUrl: e.target.value || undefined })}
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  Replaces the public proxy rotation in production. Target URL is appended URL-encoded.{' '}
+                  Deploy a{' '}
+                  <a href="https://developers.cloudflare.com/workers/" target="_blank" rel="noopener noreferrer" className="text-branch-600 underline">Cloudflare Worker</a>
+                  {' '}or{' '}
+                  <a href="https://vercel.com/docs/functions/edge-functions" target="_blank" rel="noopener noreferrer" className="text-branch-600 underline">Vercel Edge Function</a>
+                  {' '}as your private proxy. Leave blank to use built-in public proxies.
+                </p>
+              </div>
             </div>
           </div>
 

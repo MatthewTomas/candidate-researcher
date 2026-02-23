@@ -69,9 +69,27 @@ function shuffleArray<T>(arr: T[]): T[] {
   return arr;
 }
 
-async function fetchViaCorsProxy(url: string, timeoutMs = 10000): Promise<Response> {
+async function fetchViaCorsProxy(url: string, timeoutMs = 10000, privateProxyUrl?: string): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  // If a private proxy is configured, use it exclusively — no fallback to public proxies.
+  // This is the recommended production configuration.
+  if (privateProxyUrl) {
+    try {
+      const proxiedUrl = `${privateProxyUrl}${encodeURIComponent(url)}`;
+      const resp = await fetch(proxiedUrl, {
+        signal: controller.signal,
+        headers: { 'Accept': 'text/html,application/xhtml+xml,*/*' },
+      });
+      clearTimeout(timer);
+      if (resp.ok) return resp;
+      console.warn(`Private CORS proxy returned ${resp.status} for ${url.slice(0, 60)}`);
+    } catch (err) {
+      clearTimeout(timer);
+      throw new Error(`Private CORS proxy failed for ${url}: ${(err as Error).message?.slice(0, 80)}`);
+    }
+  }
 
   // Randomize proxy order for load distribution
   const proxies = shuffleArray([...CORS_PROXIES]);
@@ -540,10 +558,10 @@ function getSourceBiasTier(url: string): 1 | 2 | 3 | 4 {
 // Fetch & extract a single page
 // ============================================================================
 
-async function fetchPage(url: string): Promise<FetchedPage> {
+async function fetchPage(url: string, corsProxyUrl?: string): Promise<FetchedPage> {
   const fetchedAt = new Date().toISOString();
   try {
-    const resp = await fetchViaCorsProxy(url);
+    const resp = await fetchViaCorsProxy(url, 10000, corsProxyUrl);
     const html = await resp.text();
     const text = extractTextFromHtml(html);
     const title = extractTitleFromHtml(html) || new URL(url).hostname;
@@ -569,6 +587,9 @@ async function fetchPage(url: string): Promise<FetchedPage> {
   }
 }
 
+/** Configured private proxy URL — set once at the start of researchCandidate and used by fetchPage */
+let _activePrivateCorsProxy: string | undefined;
+
 // ============================================================================
 // Main entry point — research a candidate
 // ============================================================================
@@ -582,6 +603,12 @@ export async function researchCandidate(
 ): Promise<ResearchResult> {
   const log = onLog || (() => {});
   const searchProvider = settings.searchProvider || 'duckduckgo';
+
+  // Capture private proxy URL (if configured) for use in all fetchPage calls this run
+  _activePrivateCorsProxy = settings.corsProxyUrl?.trim() || undefined;
+  if (_activePrivateCorsProxy) {
+    log(`🔒 Using private CORS proxy: ${_activePrivateCorsProxy.slice(0, 40)}…`);
+  }
 
   // Determine actual provider — warn if falling back from Google CSE
   const useGoogleCSE = searchProvider === 'google-cse' && settings.googleSearchApiKey && settings.googleSearchEngineId;
@@ -718,7 +745,7 @@ export async function researchCandidate(
     const batch = urlsToFetch.slice(batchStart, batchStart + FETCH_CONCURRENCY);
     for (const sr of batch) log(`🌐 Fetching: ${sr.url}`);
 
-    const settled = await Promise.allSettled(batch.map(sr => fetchPage(sr.url)));
+    const settled = await Promise.allSettled(batch.map(sr => fetchPage(sr.url, _activePrivateCorsProxy)));
 
     for (const result of settled) {
       if (result.status === 'fulfilled') {

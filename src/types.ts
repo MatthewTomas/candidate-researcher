@@ -640,6 +640,14 @@ export interface AppSettings {
   googleSearchApiKey?: string;
   /** Google Custom Search engine ID (cx param) */
   googleSearchEngineId?: string;
+  /**
+   * Optional private CORS proxy URL for production page fetching.
+   * Format: "https://your-worker.example.com/?url=" (the target URL is appended, URL-encoded).
+   * When set, ALL page fetches go through this proxy instead of the public proxy rotation.
+   * Recommended: deploy a Cloudflare Worker or Vercel Edge Function as your private proxy.
+   * Leave blank to continue using the public proxy rotation (fine for development).
+   */
+  corsProxyUrl?: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
