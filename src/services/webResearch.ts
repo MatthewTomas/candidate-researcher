@@ -685,8 +685,28 @@ export async function researchCandidate(
     }
   }
 
-  // 4. Fetch pages — limit to top ~25 to cover social + news + campaign
-  const urlsToFetch = uniqueResults.slice(0, 25);
+  // 4a. Filter out prohibited domains entirely — don't fetch Ballotpedia/VoteSmart/Wikipedia.
+  //     The Writer is already instructed never to cite them, but sending their HTML to the LLM
+  //     wastes tokens and risks content contamination.
+  const filteredResults = uniqueResults.filter(r => {
+    try {
+      const hostname = new URL(r.url).hostname.toLowerCase();
+      return !PROHIBITED_DOMAINS.some(d => hostname.includes(d));
+    } catch { return false; }
+  });
+  const prohibitedSkipped = uniqueResults.length - filteredResults.length;
+  if (prohibitedSkipped > 0) {
+    log(`⛔ Skipping ${prohibitedSkipped} prohibited URL(s) (Ballotpedia/VoteSmart/Wikipedia)`);
+  }
+
+  // 4b. Sort by source trust tier BEFORE slicing so the best sources fill fetch slots.
+  //     Without this, a "ballotpedia" search query at position 0 would have eaten the first 8 slots.
+  const sortedResults = [...filteredResults].sort(
+    (a, b) => getSourceBiasTier(a.url) - getSourceBiasTier(b.url),
+  );
+
+  // 4c. Limit to top 25 after filtering + sorting.
+  const urlsToFetch = sortedResults.slice(0, 25);
   const pages: FetchedPage[] = [];
   let totalFailed = 0;
 
@@ -697,8 +717,7 @@ export async function researchCandidate(
       log(`   ⚠ Failed: ${page.error}`);
       totalFailed++;
     } else {
-      const charCount = page.text.length;
-      log(`   📄 Extracted ${charCount.toLocaleString()} chars from ${page.title}`);
+      log(`   📄 Extracted ${page.text.length.toLocaleString()} chars from ${page.title}`);
     }
     pages.push(page);
   }
