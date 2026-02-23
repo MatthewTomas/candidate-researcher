@@ -3,7 +3,7 @@
  */
 
 import { HfInference } from '@huggingface/inference';
-import type { AIProvider, AIGenerateOptions } from '../aiProvider';
+import type { AIProvider, AIGenerateOptions, ChatTurn } from '../aiProvider';
 import type { AIProviderType } from '../../types';
 import { AI_PROVIDERS } from '../../types';
 import { parseJSONResponse } from '../jsonParser';
@@ -43,8 +43,14 @@ export class HuggingFaceProvider implements AIProvider {
   }
 
   async verifyWithGrounding(prompt: string, options?: AIGenerateOptions): Promise<string> {
-    // HuggingFace does not support grounding — normal generation
     return this.generateText(prompt, options);
+  }
+
+  async generateJSONWithHistory<T>(history: ChatTurn[], newUserMessage: string, options?: AIGenerateOptions): Promise<{ result: T; updatedHistory: ChatTurn[] }> {
+    const context = history.map(t => `${t.role === 'user' ? 'User' : 'Assistant'}: ${t.content}`).join('\n\n');
+    const fullPrompt = context ? `${context}\n\nUser: ${newUserMessage}` : newUserMessage;
+    const result = await this.generateJSON<T>(fullPrompt, options);
+    return { result, updatedHistory: [...history, { role: 'user', content: newUserMessage }, { role: 'assistant', content: JSON.stringify(result) }] };
   }
 
   async testConnection(): Promise<boolean> {

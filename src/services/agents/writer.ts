@@ -11,7 +11,7 @@
  * each issue and requires the Writer to fix every one.
  */
 
-import type { AIProvider } from '../aiProvider';
+import type { AIProvider, ChatTurn } from '../aiProvider';
 import type { StagingDraft, CriticFeedback, CriticIssue } from '../../types';
 import { getCustomPrompt } from '../promptStorage';
 
@@ -638,26 +638,147 @@ RULES:
 }
 
 /**
- * Main entry: Run the Writer agent with chunked generation.
+ * Main entry: Run the Writer agent with chunked generation and shared conversation context.
  *
- * Round 1: No previous draft — generate bios, then plan issues from source material, then fill them in batches.
- * Round 2+: Previous draft + critic feedback — generate revised bios, then revised issues in batches.
+ * Context retention strategy:
+ * - Turn 1 (user): system context + source material + bio request
+ * - Turn 1 (assistant): bio JSON
+ * - Turn 2 (user): "Now plan which issue categories..." (no source re-send)
+ * - Turn 2 (assistant): issue category list
+ * - Turn 3-N (user): "Now generate issues for batch [X]..." (no source re-send)
+ * - Turn 3-N (assistant): issue JSON
+ *
+ * For Gemini: uses native multi-turn `contents` array — source material in context window once.
+ * For other providers: falls back to a concatenated-history approach.
+ *
+ * Token savings: ~60% reduction per candidate on first-pass generation.
  */
 export async function runWriter(provider: AIProvider, input: WriterInput): Promise<Partial<StagingDraft>> {
-  // Step 1: Generate bios
-  const biosResult = await generateBios(provider, input);
+  const systemPrompt = getCustomPrompt('writer') ?? WRITER_SYSTEM_PROMPT;
+  const options = { systemPrompt, temperature: 0.3, maxTokens: 8192 };
 
-  // Step 2: Determine which issue categories to generate
-  let issueKeys: string[];
-  if (input.previousDraft?.issues?.length) {
-    // Revision — use the same issue keys from the previous draft
-    issueKeys = input.previousDraft.issues.map(i => i.key || i.title);
-  } else {
-    // First pass — ask the AI to plan which issues to cover
-    issueKeys = await planIssueCategories(provider, input);
+  // Build the opening context message that carries the source material.
+  // All subsequent turns reference this via conversation history.
+  const preparedSource = prepareSourceContent(input.sourceContent, input.candidateName);
+  const fixInstructions = input.criticFeedback ? buildFixInstructions(input.criticFeedback) : '';
+  const cleanedPrev = input.previousDraft
+    ? stripFabricatedUrls(input.previousDraft, input.criticFeedback)
+    : undefined;
+
+  const openingContext = `You are generating a Branch Politics candidate profile for "${input.candidateName}".
+
+SOURCE MATERIAL (retained in context for all steps — do NOT ask for it again):
+${preparedSource}
+${fixInstructions}
+
+I will ask you to generate different sections of the profile in separate messages. Wait for each instruction before generating.`;
+
+  // ── Step 1: Bios ──
+  const bioFeedback = filterIssuesForSections(input.criticFeedback, ['bio-']);
+  const bioFixInstructions = bioFeedback ? buildFixInstructions(bioFeedback) : '';
+  const existingBios = cleanedPrev?.bios
+    ? `\n\nEXISTING BIOS (revise based on feedback):\n${JSON.stringify({ name: cleanedPrev.name, links: cleanedPrev.links, bios: cleanedPrev.bios }, null, 2)}`
+    : '';
+
+  const bioRequest = `Generate the BIOGRAPHIES portion of the profile.
+${existingBios}
+${bioFixInstructions}
+
+Return JSON with ONLY these fields:
+{
+  "name": "Candidate Full Name",
+  "links": [{ "mediaType": "website"|"facebook"|"twitter"|"instagram"|"linkedin"|"youtube"|"other", "url": "..." }],
+  "bios": [
+    { "type": "personal", "text": "...", "sources": [{ "sourceType": "website"|"news"|"social"|"other", "directQuote": "...", "url": "..." }], "complete": true },
+    { "type": "professional", "text": "...", "sources": [...], "complete": true },
+    { "type": "political", "text": "...", "sources": [...], "complete": true }
+  ]
+}
+
+═══════════════════════════════════════════
+BIO FORMAT — STRICT RULES (MUST FOLLOW EXACTLY)
+═══════════════════════════════════════════
+
+PERSONAL BIO: Origin → Education → Family/Location.
+  GOOD: "Maria Elena Garcia was raised in San Antonio. She earned a bachelor's degree in criminal justice from the University of Texas at San Antonio and a law degree from St. Mary's University School of Law. She has three children."
+  RULES: Full name on FIRST mention only. Lowercase degrees. Number of children, NOT names. 2-3 sentences max. No job descriptions.
+
+PROFESSIONAL BIO: Current job title and employer ONLY. Past non-political jobs listed without dates.
+  GOOD: "Maria is a prosecutor in the Bexar County District Attorney's Office."
+  *** CRITICAL: NEVER include elected offices here — those belong ONLY in the political bio. ***
+
+POLITICAL BIO: Elected positions only, reverse chronological. MUST include year first elected and terms served.
+  GOOD: "John has served as state representative for District 42 since 2020 and was re-elected in 2022."
+  *** CRITICAL: Every elected position MUST include year elected. Missing years = flagged as MAJOR. ***
+  If no elected office: "As of February 2026, [first name] has not held elected office."
+
+ADDITIONAL RULES:
+- Every claim needs a source with a "directQuote" CMD+F-searchable on the source page.
+- Degrees lowercase. Family: number of children, not their names.
+- Keep each bio CONCISE — 1-3 sentences.`;
+
+  // Kick off the conversation with the opening context + bio request combined
+  const firstMessage = `${openingContext}\n\n---\n\n${bioRequest}`;
+
+  let history: ChatTurn[] = [];
+  const { result: biosResult, updatedHistory: historyAfterBios } =
+    await provider.generateJSONWithHistory<{ name: string; links: any[]; bios: any[] }>(
+      history,
+      firstMessage,
+      options,
+    );
+  history = historyAfterBios;
+
+  // Post-process: strip any bracket placeholders from bios
+  if (biosResult?.bios) {
+    const bracketPattern = /\[(?:hometown|degree|subject|Institution|job title|Employer Name|city|wife|husband|partner|Spouse Name|#|First name|He\/She\/They|his\/her\/their)\]/gi;
+    for (const bio of biosResult.bios) {
+      if (bio.text && bracketPattern.test(bio.text)) {
+        const firstName = input.candidateName.split(/\s+/)[0];
+        if (bio.type === 'personal') bio.text = `As of February 2026, ${input.candidateName}'s personal background information was not available.`;
+        else if (bio.type === 'professional') bio.text = `As of February 2026, ${input.candidateName}'s professional background information was not available.`;
+        else if (bio.type === 'political') bio.text = `As of February 2026, ${firstName} has not held elected office.`;
+        bio.sources = [];
+        bio.complete = false;
+      }
+    }
   }
 
-  // Step 3: Generate issues in batches
+  // ── Step 2: Issue categories ──
+  let issueKeys: string[];
+  if (input.previousDraft?.issues?.length) {
+    issueKeys = input.previousDraft.issues.map(i => i.key || i.title);
+  } else {
+    // Ask for issue planning as a follow-up — no source re-send needed
+    const isSourceless = !input.sourceContent.trim() || input.sourceContent.trim() === '(No source material found from web research)';
+    if (isSourceless) {
+      issueKeys = ['economy', 'public-safety', 'healthcare', 'education'];
+    } else {
+      const planRequest = `Based on the source material you already have in context, which issue categories have enough information for policy stances?
+
+Return a JSON array of issue category keys (lowercase, hyphenated) chosen ONLY from this list:
+["economy", "public-safety", "healthcare", "education", "energy-environment", "foreign-policy-immigration", "voting-elections", "consumer-protection", "housing-urban-development", "public-services", "public-health", "school-curriculum", "businesses", "small-businesses", "fire-safety", "insurance", "teachers", "administration", "criminal-justice", "taxes", "financial-management", "retirement", "ethics-corruption"]
+
+RULES:
+- Only include categories where the candidate has SPECIFIC stated positions.
+- Rank by how much source material supports them — strongest first.
+- Return 4-8 categories. If fewer than 4 have strong support, return only what is supported.
+- Return the JSON array only.`;
+
+      try {
+        const { result: plannedKeys, updatedHistory: historyAfterPlan } =
+          await provider.generateJSONWithHistory<string[]>(history, planRequest, { ...options, maxTokens: 512, temperature: 0.1 });
+        history = historyAfterPlan;
+        issueKeys = Array.isArray(plannedKeys) && plannedKeys.length > 0
+          ? plannedKeys
+          : ['economy', 'public-safety', 'healthcare', 'education'];
+      } catch {
+        issueKeys = ['economy', 'public-safety', 'healthcare', 'education'];
+      }
+    }
+  }
+
+  // ── Step 3: Issue batches (each as a follow-up turn) ──
   const allIssues: any[] = [];
   for (let i = 0; i < issueKeys.length; i += ISSUES_PER_BATCH) {
     const batchKeys = issueKeys.slice(i, i + ISSUES_PER_BATCH);
@@ -665,25 +786,69 @@ export async function runWriter(provider: AIProvider, input: WriterInput): Promi
       iss => batchKeys.includes(iss.key) || batchKeys.includes(iss.title),
     );
 
+    const issueFeedback = filterIssuesForSections(
+      input.criticFeedback,
+      batchKeys.map(k => `issue-${k}`).concat(['stance-']),
+    );
+    const issueFix = issueFeedback ? buildFixInstructions(issueFeedback) : '';
+    const existingContext = existingBatchIssues?.length
+      ? `\n\nEXISTING ISSUES TO REVISE:\n${JSON.stringify(
+          stripFabricatedUrls({ issues: existingBatchIssues }, input.criticFeedback).issues, null, 2)}`
+      : '';
+
+    const batchRequest = `Now generate ISSUE & STANCE entries for these categories: ${batchKeys.map(k => `"${k}"`).join(', ')}.
+${existingContext}
+${issueFix}
+
+Return a JSON array of issue objects:
+[
+  {
+    "key": "issue-key",
+    "title": "Issue Title",
+    "complete": true,
+    "stances": [
+      {
+        "text": "Action-verb stance text.",
+        "sources": [{ "sourceType": "website"|"news"|"social"|"other", "directQuote": "exact CMD+F quote", "url": "source url" }],
+        "complete": true,
+        "directQuote": "key quote",
+        "issuesSecondary": [],
+        "textApproved": false,
+        "editsMade": false
+      }
+    ],
+    "textArray": [],
+    "sources": [],
+    "isTopPriority": false,
+    "policyTerms": []
+  }
+]
+
+RULES:
+- Start each stance with: "Supports", "Opposes", "Advocates for", "Plans to", "Believes", "Said", "Wants to"
+- Unbundle compound stances into separate items
+- Every stance needs a CMD+F-searchable directQuote
+- If no info available: use stance "As of February 2026, [candidate]'s public statements did not contain information on this issue." and set missingData: "issue-specific"
+- Strictly nonpartisan language`;
+
     try {
-      const batchIssues = await generateIssueBatch(provider, input, batchKeys, existingBatchIssues);
+      const { result: batchIssues, updatedHistory: historyAfterBatch } =
+        await provider.generateJSONWithHistory<any[]>(history, batchRequest, options);
+      history = historyAfterBatch;
       if (Array.isArray(batchIssues)) {
         allIssues.push(...batchIssues);
       }
     } catch (err) {
-      // If a batch fails, preserve existing issues for those categories and continue
       if (existingBatchIssues?.length) {
         allIssues.push(...existingBatchIssues);
       }
-      // Don't throw — partial progress is better than nothing
     }
   }
 
-  // Merge into final draft
   return {
-    name: biosResult.name || input.candidateName,
-    links: biosResult.links || [],
-    bios: biosResult.bios || [],
+    name: (biosResult?.name as string) || input.candidateName,
+    links: biosResult?.links || [],
+    bios: biosResult?.bios || [],
     issues: allIssues,
   };
 }

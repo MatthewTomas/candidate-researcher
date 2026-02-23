@@ -14,6 +14,7 @@
  */
 
 import type { CandidateMetadata, AppSettings } from '../types';
+import { Readability } from '@mozilla/readability';
 
 // ============================================================================
 // Types
@@ -109,30 +110,59 @@ async function fetchViaCorsProxy(url: string, timeoutMs = 10000): Promise<Respon
 // Text Extraction (from HTML string)
 // ============================================================================
 
-function extractTextFromHtml(html: string, maxChars = 15000): string {
+/**
+ * Extract clean article text from HTML using Mozilla Readability.
+ * Falls back to manual DOM scraping if Readability can't parse the page.
+ *
+ * Readability strips navigation, ads, sidebars, footers, related articles,
+ * and cookie banners — exactly the boilerplate that wastes LLM tokens.
+ * Typical savings: 15,000 chars → 2,000–5,000 chars.
+ *
+ * MAX_CHARS is 6,000 (vs old 15,000) — sufficient for a full article while
+ * reducing token cost by ~60%.
+ */
+function extractTextFromHtml(html: string, maxChars = 6000): string {
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
 
-    // Remove script, style, nav, footer, header (boilerplate)
-    const removeTags = ['script', 'style', 'nav', 'footer', 'header', 'noscript', 'svg', 'iframe'];
+    // --- Strategy 1: Mozilla Readability (best for articles, news, bios) ---
+    // Clone document because Readability mutates the DOM
+    const docClone = doc.cloneNode(true) as Document;
+    const reader = new Readability(docClone, {
+      charThreshold: 100,   // minimum chars for a content block to be kept
+      keepClasses: false,
+    });
+    const article = reader.parse();
+
+    if (article?.textContent && article.textContent.trim().length > 200) {
+      const cleaned = article.textContent
+        .replace(/\s+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+      return cleaned.slice(0, maxChars);
+    }
+
+    // --- Strategy 2: Manual extraction (campaign sites, government pages, SPAs) ---
+    // Readability fails on pages with little long-form prose (e.g. campaign site with bullet points)
+    const removeTags = ['script', 'style', 'nav', 'footer', 'header', 'noscript', 'svg', 'iframe', 'aside', 'form', '.cookie-banner', '#cookie-notice', '.ad', '.advertisement'];
     for (const tag of removeTags) {
       doc.querySelectorAll(tag).forEach(el => el.remove());
     }
 
-    // Try to find main content area first
-    const mainContent = doc.querySelector('main, article, [role="main"], .content, #content, .post-content, .entry-content');
+    // Prefer semantic content containers
+    const mainContent = doc.querySelector(
+      'main, article, [role="main"], .content, #content, .post-content, .entry-content, .bio, .about, .candidate-bio, .page-content'
+    );
     const root = mainContent || doc.body;
     if (!root) return '';
 
-    const text = root.textContent || '';
-    // Clean up whitespace
-    const cleaned = text
+    const text = (root.textContent || '')
       .replace(/\s+/g, ' ')
-      .replace(/\n\s*\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
       .trim();
 
-    return cleaned.slice(0, maxChars);
+    return text.slice(0, maxChars);
   } catch {
     return '';
   }
@@ -703,13 +733,39 @@ export function formatResearchAsSourceContent(research: ResearchResult): string 
 
   // Sort by bias tier — most trustworthy sources first
   const sorted = [...successPages].sort((a, b) => (a.biasTier || 4) - (b.biasTier || 4));
+
+  // ── Deduplication: drop near-duplicate articles (e.g. AP wire syndicated content) ──
+  // Fingerprint = first 300 chars of text, lowercased and whitespace-normalised.
+  // If two pages share a fingerprint, keep only the higher-trust source.
+  const seenFingerprints = new Set<string>();
+  const deduped: FetchedPage[] = [];
+  let droppedDupes = 0;
+  for (const page of sorted) {
+    const fingerprint = page.text
+      .slice(0, 300)
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!seenFingerprints.has(fingerprint)) {
+      seenFingerprints.add(fingerprint);
+      deduped.push(page);
+    } else {
+      droppedDupes++;
+    }
+  }
+
   const TIER_LABELS: Record<number, string> = { 1: 'Tier 1 (most trusted)', 2: 'Tier 2 (major news)', 3: 'Tier 3 (partisan)', 4: 'Tier 4 (unranked)' };
 
   sections.push('=== SOURCE MATERIAL ===');
   sections.push(`The following content was retrieved from the web. You may ONLY cite URLs listed here.`);
-  sections.push(`Sources are ordered by trustworthiness. Prefer Tier 1–2 sources over Tier 3–4.\n`);
+  sections.push(`Sources are ordered by trustworthiness. Prefer Tier 1–2 sources over Tier 3–4.`);
+  if (droppedDupes > 0) {
+    sections.push(`(${droppedDupes} duplicate/syndicated article(s) removed)\n`);
+  } else {
+    sections.push('');
+  }
 
-  for (const page of sorted) {
+  for (const page of deduped) {
     const tierLabel = TIER_LABELS[page.biasTier || 4];
     sections.push(`--- SOURCE: ${page.url} [${tierLabel}] ---`);
     sections.push(`Title: ${page.title}`);

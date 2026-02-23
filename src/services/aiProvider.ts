@@ -27,6 +27,15 @@ export interface AIGenerateOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * A single turn in a multi-turn conversation.
+ * role 'user' = human turn, 'assistant' = model turn.
+ */
+export interface ChatTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface AIProvider {
   readonly type: AIProviderType;
   readonly model: string;
@@ -36,6 +45,13 @@ export interface AIProvider {
 
   /** Structured JSON generation (will parse and validate) */
   generateJSON<T>(prompt: string, options?: AIGenerateOptions): Promise<T>;
+
+  /**
+   * Multi-turn JSON generation — sends the full conversation history plus a new
+   * user message, returns parsed JSON, and appends both turns to history.
+   * Falls back to single-turn generateJSON if the provider doesn't implement multi-turn.
+   */
+  generateJSONWithHistory<T>(history: ChatTurn[], newUserMessage: string, options?: AIGenerateOptions): Promise<{ result: T; updatedHistory: ChatTurn[] }>;
 
   /** Verification with optional web search grounding (only some providers support this) */
   verifyWithGrounding(prompt: string, options?: AIGenerateOptions): Promise<string>;
@@ -167,6 +183,12 @@ export class TrackedProvider implements AIProvider {
   async generateJSON<T>(prompt: string, options?: AIGenerateOptions): Promise<T> {
     const fullPrompt = options?.systemPrompt ? `${options.systemPrompt}\n\n${prompt}` : prompt;
     return this.track(fullPrompt, () => this.inner.generateJSON<T>(prompt, options));
+  }
+
+  async generateJSONWithHistory<T>(history: ChatTurn[], newUserMessage: string, options?: AIGenerateOptions): Promise<{ result: T; updatedHistory: ChatTurn[] }> {
+    // Track using the new user message as the prompt identifier
+    const fullPrompt = options?.systemPrompt ? `${options.systemPrompt}\n\n${newUserMessage}` : newUserMessage;
+    return this.track(fullPrompt, () => this.inner.generateJSONWithHistory<T>(history, newUserMessage, options));
   }
 
   async verifyWithGrounding(prompt: string, options?: AIGenerateOptions): Promise<string> {

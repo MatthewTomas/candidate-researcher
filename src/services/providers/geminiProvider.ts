@@ -4,7 +4,7 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import type { AIProvider, AIGenerateOptions } from '../aiProvider';
+import type { AIProvider, AIGenerateOptions, ChatTurn } from '../aiProvider';
 import type { AIProviderType } from '../../types';
 import { AI_PROVIDERS } from '../../types';
 import { parseJSONResponse } from '../jsonParser';
@@ -42,6 +42,52 @@ export class GeminiProvider implements AIProvider {
     const jsonPrompt = `${prompt}\n\nRespond ONLY with valid JSON. No markdown code fences, no explanation outside the JSON.`;
     const text = await this.generateText(jsonPrompt, { ...options, jsonMode: true });
     return parseJSONResponse<T>(text, 'Gemini');
+  }
+
+  /**
+   * Multi-turn JSON generation using Gemini's native conversation history.
+   * The source material only needs to be in the first user turn — subsequent
+   * turns reference it through conversation context, eliminating redundant re-sends.
+   *
+   * `history` is an array of prior turns (user/assistant alternating).
+   * Returns the parsed JSON result AND the updated history with the new turns appended.
+   */
+  async generateJSONWithHistory<T>(
+    history: ChatTurn[],
+    newUserMessage: string,
+    options?: AIGenerateOptions,
+  ): Promise<{ result: T; updatedHistory: ChatTurn[] }> {
+    const config: Record<string, unknown> = {
+      responseMimeType: 'application/json',
+    };
+    if (options?.temperature !== undefined) config.temperature = options.temperature;
+    if (options?.maxTokens) config.maxOutputTokens = options.maxTokens;
+    if (options?.systemPrompt) config.systemInstruction = options.systemPrompt;
+
+    // Build the Gemini contents array from history + new message
+    const jsonMessage = `${newUserMessage}\n\nRespond ONLY with valid JSON. No markdown code fences, no explanation outside the JSON.`;
+    const contents = [
+      ...history.map(turn => ({ role: turn.role === 'assistant' ? 'model' : 'user', parts: [{ text: turn.content }] })),
+      { role: 'user', parts: [{ text: jsonMessage }] },
+    ];
+
+    const response = await this.client.models.generateContent({
+      model: this.model,
+      contents,
+      config,
+    });
+
+    const text = response.text ?? '';
+    const result = parseJSONResponse<T>(text, 'Gemini (chat)');
+
+    // Append both turns to the history
+    const updatedHistory: ChatTurn[] = [
+      ...history,
+      { role: 'user', content: newUserMessage },
+      { role: 'assistant', content: text },
+    ];
+
+    return { result, updatedHistory };
   }
 
   async verifyWithGrounding(prompt: string, options?: AIGenerateOptions): Promise<string> {
