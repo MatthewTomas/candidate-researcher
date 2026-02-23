@@ -78,7 +78,8 @@ export default function ProcessingPanel({ onSelect }: ProcessingPanelProps) {
 
   const addLog = useCallback((msg: string) => {
     const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
-    setProcessingLog(prev => [...prev, line]);
+    // Cap at 500 lines — batch log is for monitoring, not forensics
+    setProcessingLog(prev => prev.length >= 500 ? [...prev.slice(-499), line] : [...prev, line]);
   }, []);
 
   const runBatch = useCallback(async (queuedItems: BatchQueueItem[]) => {
@@ -155,6 +156,9 @@ export default function ProcessingPanel({ onSelect }: ProcessingPanelProps) {
       const addCandidateLog = (msg: string) => {
         const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
         candidateLog.push(line);
+        // Cap per-candidate log at 800 lines to prevent excessive localStorage/state growth
+        // (50 candidates × 800 lines × ~100 chars ≈ 4 MB max in the worst case)
+        if (candidateLog.length > 800) candidateLog.splice(0, candidateLog.length - 800);
         addLog(msg);
         // Throttled flush: update session buildLog so side panel sees live logs
         if (latestSession) {
