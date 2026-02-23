@@ -498,10 +498,17 @@ ONLY output the JSON array, no other text.`;
       const criticDuration = ((Date.now() - criticStart) / 1000).toFixed(1);
       callbacks.onLog(`Round ${round}: Critic took ${criticDuration}s`);
 
+      // Converge when quality thresholds are met.
+      // Failed agents are NOT a convergence blocker — a degraded provider (503, rate-limit)
+      // should not force extra rounds when the draft already meets the quality bar.
+      // A separate log warning is emitted below when agents did fail.
       converged = feedback.overallScore >= (settings.convergenceThreshold || 80)
         && feedback.issues.filter(i => i.severity === 'critical').length === 0
-        && feedback.issues.filter(i => i.severity === 'major').length === 0
-        && (feedback.failedAgents?.length ?? 0) === 0;
+        && feedback.issues.filter(i => i.severity === 'major').length === 0;
+
+      if (converged && (feedback.failedAgents?.length ?? 0) > 0) {
+        callbacks.onLog(`⚠ ${feedback.failedAgents!.length} critic agent(s) failed (${feedback.failedAgents!.join(', ')}) but quality threshold met — converging anyway. Review manually.`);
+      }
     }
 
     const builderRound: BuilderRound = {

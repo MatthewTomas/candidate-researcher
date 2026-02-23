@@ -307,6 +307,69 @@ const ISSUES_PER_BATCH = 4;
 const NO_SOURCE_SENTINEL = '(No source material found from web research)';
 
 /**
+ * Sanitize raw source text against prompt injection attacks.
+ *
+ * Campaign websites and news pages might intentionally (or accidentally) contain
+ * text that could hijack the LLM's behavior when inserted verbatim into prompts.
+ * This function scrubs the most common adversarial instruction patterns without
+ * materially damaging the factual content.
+ *
+ * Strategy:
+ *   1. Strip lines that are purely injection attempts (e.g. "IGNORE ALL PRIOR INSTRUCTIONS")
+ *   2. Strip structural prompt tokens that might shift the model's role context
+ *   3. Collapse any resulting blank lines to keep formatting clean
+ */
+function sanitizeSourceForPrompt(text: string): string {
+  // Patterns that span an entire line (case-insensitive)
+  const INJECTION_LINE_PATTERNS: RegExp[] = [
+    /ignore\s+(all\s+)?(prior|previous|above|any|the)\s+(instructions?|prompts?|rules?|directives?|context)/i,
+    /disregard\s+(all\s+)?(prior|previous|above|any|the)\s+(instructions?|prompts?|rules?|directives?)/i,
+    /forget\s+(everything|all\s+previous|your\s+instructions?|prior\s+context)/i,
+    /you\s+are\s+now\s+(a|an)\s+\w/i,
+    /your\s+new\s+(role|task|instructions?|directive)/i,
+    /new\s+instructions?:/i,
+    /override\s+(your\s+)?(previous|prior|all)\s+(instructions?|behavior|rules?)/i,
+    /act\s+as\s+(a|an)\s+\w+\s+(without\s+restrictions?|freely)/i,
+    /jailbreak|dan\s+mode|developer\s+mode\s+enabled/i,
+  ];
+
+  // Structural prompt tokens that could shift role context
+  const INJECTION_TOKEN_PATTERNS: RegExp[] = [
+    /\[INST\]|\[\/INST\]|\[SYS\]|\[\/SYS\]/g,
+    /<\|system\|>|<\|user\|>|<\|assistant\|>|<\|im_start\|>|<\|im_end\|>/g,
+    /^(SYSTEM|ASSISTANT|USER)\s*:/gm,
+    /^#{1,3}\s*(SYSTEM PROMPT|INSTRUCTIONS?|NEW TASK)\s*$/gim,
+  ];
+
+  let sanitized = text;
+
+  // Remove structural tokens first (inline replacements)
+  for (const pattern of INJECTION_TOKEN_PATTERNS) {
+    sanitized = sanitized.replace(pattern, '');
+  }
+
+  // Filter out lines that match injection line patterns
+  const lines = sanitized.split('\n');
+  const filteredLines = lines.filter(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return true; // keep blank lines for now, collapse later
+    return !INJECTION_LINE_PATTERNS.some(p => p.test(trimmed));
+  });
+
+  // Collapse multiple consecutive blank lines to at most one
+  const collapsed: string[] = [];
+  let prevBlank = false;
+  for (const line of filteredLines) {
+    const isBlank = line.trim() === '';
+    if (isBlank && prevBlank) continue;
+    collapsed.push(line);
+    prevBlank = isBlank;
+  }
+
+  return collapsed.join('\n');
+}
+
+/**
  * Transform source content to include explicit no-source instructions when empty.
  * This prevents the Writer from fabricating information.
  */
@@ -329,7 +392,7 @@ STRICT INSTRUCTIONS FOR NO-SOURCE PROFILES:
 - Every source array must be EMPTY []. Do not create fake sources.
 - The links array must be EMPTY [].`;
   }
-  return trimmed;
+  return sanitizeSourceForPrompt(trimmed);
 }
 
 /**
@@ -444,197 +507,6 @@ function filterIssuesForSections(feedback: CriticFeedback | undefined, sectionPr
   );
   if (filtered.length === 0) return undefined;
   return { ...feedback, issues: filtered };
-}
-
-/**
- * Step 1: Generate bios (name, links, 3 biographies).
- */
-async function generateBios(
-  provider: AIProvider,
-  input: WriterInput,
-): Promise<Pick<StagingDraft, 'name'> & { links: any[]; bios: any[] }> {
-  const bioFeedback = filterIssuesForSections(input.criticFeedback, ['bio-']);
-  const fixInstructions = bioFeedback ? buildFixInstructions(bioFeedback) : '';
-
-  // Strip fabricated URLs from existing draft before passing back to the writer
-  const cleanedPrev = input.previousDraft
-    ? stripFabricatedUrls(input.previousDraft, input.criticFeedback)
-    : undefined;
-
-  const existingBios = cleanedPrev?.bios
-    ? `\n\nEXISTING BIOS (revise based on feedback):\n${JSON.stringify({ name: cleanedPrev.name, links: cleanedPrev.links, bios: cleanedPrev.bios }, null, 2)}`
-    : '';
-
-  const prompt = `Generate the BIOGRAPHIES portion of a candidate profile for "${input.candidateName}".
-
-SOURCE MATERIAL:
-${prepareSourceContent(input.sourceContent, input.candidateName)}
-${existingBios}
-${fixInstructions}
-
-Return JSON with ONLY these fields:
-{
-  "name": "Candidate Full Name",
-  "links": [{ "mediaType": "website"|"facebook"|"twitter"|"instagram"|"linkedin"|"youtube"|"other", "url": "..." }],
-  "bios": [
-    { "type": "personal", "text": "Personal background text...", "sources": [{ "sourceType": "website"|"news"|"social"|"other", "directQuote": "exact CMD+F-searchable quote from source", "url": "source url" }], "complete": true },
-    { "type": "professional", "text": "Professional background text...", "sources": [...], "complete": true },
-    { "type": "political", "text": "Political background text...", "sources": [...], "complete": true }
-  ]
-}
-
-═══════════════════════════════════════════
-BIO FORMAT — STRICT RULES (MUST FOLLOW EXACTLY)
-═══════════════════════════════════════════
-
-PERSONAL BIO: Origin → Education → Family/Location.
-  GOOD: "Maria Elena Garcia was raised in San Antonio. She earned a bachelor's degree in criminal justice from the University of Texas at San Antonio and a law degree from St. Mary's University School of Law. She has three children."
-  BAD (too long, narrative, includes job info): "Maria Elena Garcia is a dedicated public servant who has spent decades fighting for justice in Bexar County. She was born and raised in San Antonio, Texas, where she developed a passion for law enforcement. She graduated from the University of Texas with a Bachelor of Arts in Criminal Justice..."
-  RULES: Full name on FIRST mention only. Lowercase degrees. Number of children, NOT names. 2-3 sentences max. No job descriptions — that's for professional bio.
-
-PROFESSIONAL BIO: Current job title and employer ONLY. ONE sentence. Past non-political jobs listed without dates or descriptions.
-  GOOD: "Maria is a prosecutor in the Bexar County District Attorney's Office."
-  GOOD: "John is a partner at Smith & Associates. He previously worked as an assistant district attorney."
-  BAD (includes elected positions): "Maria is a prosecutor and currently serves as a county commissioner."
-  BAD (includes dates): "Maria has served as a prosecutor since 2015."
-  BAD (includes duties): "Maria is a prosecutor handling complex felony cases and mentoring junior attorneys."
-
-  *** CRITICAL: The professional bio must NEVER include elected offices, political positions, government appointments, or any role obtained through election or political appointment. Those belong ONLY in the political bio. ***
-  *** If a candidate's only job is an elected position (e.g., full-time mayor), the professional bio should describe what they did BEFORE holding office, or state their pre-office profession. ***
-
-POLITICAL BIO: Elected positions only, reverse chronological. MUST include the year first elected and term information where available.
-  GOOD: "Maria ran for Bexar County district attorney in 2024 but did not win. She was elected to the San Antonio City Council District 5 seat in 2018."
-  GOOD: "John has served as state representative for District 42 since 2020. He was re-elected in 2022. He previously served on the Dallas City Council from 2016 to 2020."
-  BAD (missing years): "Maria serves on the city council and ran for district attorney."
-  BAD (includes non-elected roles): "Maria is a well-known community leader who has been involved in local politics for many years. She serves on several boards and committees."
-  BAD (missing term info): "John is a state representative." (Should include year elected and district)
-
-  *** CRITICAL: Every elected position mentioned MUST include the year first elected/appointed. Terms served (if re-elected) must be noted. If the candidate has not held elected office, write: "As of February 2026, [first name] has not held elected office." ***
-  *** NEVER include board memberships, committee assignments, community leadership roles, or appointed (non-elected) positions in the political bio. ***
-
-═══════════════════════════════════════════
-CROSS-CONTAMINATION PREVENTION (MUST FOLLOW)
-═══════════════════════════════════════════
-
-Each bio type has a STRICT lane. Content MUST NOT leak between sections:
-
-| Content Type | Personal | Professional | Political |
-|---|---|---|---|
-| Where raised / hometown | ✅ | ❌ | ❌ |
-| Education / degrees | ✅ | ❌ | ❌ |
-| Family / children | ✅ | ❌ | ❌ |
-| Current residence | ✅ | ❌ | ❌ |
-| Job title / employer | ❌ | ✅ | ❌ |
-| Past non-political jobs | ❌ | ✅ | ❌ |
-| Elected offices held | ❌ | ❌ | ✅ |
-| Election results (won/lost) | ❌ | ❌ | ✅ |
-| Year elected / terms served | ❌ | ❌ | ✅ |
-| Campaign activity | ❌ | ❌ | ✅ |
-
-If an item could go in multiple sections, put it in ONLY the section marked ✅ above.
-
-ADDITIONAL RULES:
-- Every claim needs a source with a "directQuote" that can be found with CMD+F on the source page.
-- Degrees lowercase: "law degree", "bachelor's degree in political science"
-- Family: number of children, not their names
-- Keep each bio CONCISE — 1-3 sentences. Do NOT write essays or narratives.`;
-
-  const result = await provider.generateJSON<Pick<StagingDraft, 'name'> & { links: any[]; bios: any[] }>(prompt, {
-    systemPrompt: getCustomPrompt('writer') ?? WRITER_SYSTEM_PROMPT,
-    temperature: 0.3,
-    maxTokens: 8192,
-  });
-
-  // Post-process: strip template bracket placeholders that the LLM may have output
-  // when no source material was available (e.g., "[hometown]", "[degree]", "[Spouse Name]")
-  if (result.bios) {
-    const bracketPattern = /\[(?:hometown|degree|subject|Institution|job title|Employer Name|city|wife|husband|partner|Spouse Name|#|First name|He\/She\/They|his\/her\/their)\]/gi;
-    for (const bio of result.bios) {
-      if (bio.text && bracketPattern.test(bio.text)) {
-        const firstName = input.candidateName.split(/\s+/)[0];
-        // The bio contains unfilled template placeholders — replace with proper "not available" text
-        if (bio.type === 'personal') {
-          bio.text = `As of February 2026, ${input.candidateName}'s personal background information was not available.`;
-        } else if (bio.type === 'professional') {
-          bio.text = `As of February 2026, ${input.candidateName}'s professional background information was not available.`;
-        } else if (bio.type === 'political') {
-          bio.text = `As of February 2026, ${firstName} has not held elected office.`;
-        }
-        bio.sources = [];
-        bio.complete = false;
-      }
-    }
-  }
-
-  return result;
-}
-
-/**
- * Step 2: Generate a batch of issues/stances.
- */
-async function generateIssueBatch(
-  provider: AIProvider,
-  input: WriterInput,
-  issueKeys: string[],
-  existingIssues?: any[],
-): Promise<any[]> {
-  const issueFeedback = filterIssuesForSections(
-    input.criticFeedback,
-    issueKeys.map(k => `issue-${k}`).concat(issueKeys.map(k => `stance-`)),
-  );
-  const fixInstructions = issueFeedback ? buildFixInstructions(issueFeedback) : '';
-
-  const existingContext = existingIssues?.length
-    ? `\n\nEXISTING ISSUES TO REVISE:\n${JSON.stringify(
-        stripFabricatedUrls({ issues: existingIssues }, input.criticFeedback).issues,
-        null, 2)}`
-    : '';
-
-  const issueList = issueKeys.map(k => `"${k}"`).join(', ');
-
-  const prompt = `Generate ISSUE & STANCE entries for candidate "${input.candidateName}" for these categories: ${issueList}.
-
-SOURCE MATERIAL:
-${prepareSourceContent(input.sourceContent, input.candidateName)}
-${existingContext}
-${fixInstructions}
-
-Return JSON — an array of issue objects:
-[
-  {
-    "key": "issue-key",
-    "title": "Issue Title",
-    "complete": true,
-    "stances": [
-      {
-        "text": "Action-verb stance text (e.g. 'Supports lowering property taxes for working families.')",
-        "sources": [{ "sourceType": "website"|"news"|"social"|"other", "directQuote": "exact CMD+F-searchable quote", "url": "source url" }],
-        "complete": true,
-        "directQuote": "the key quote",
-        "issuesSecondary": [],
-        "textApproved": false,
-        "editsMade": false
-      }
-    ],
-    "textArray": [],
-    "sources": [],
-    "isTopPriority": false,
-    "policyTerms": []
-  }
-]
-
-RULES:
-- Start each stance with an action verb: "Supports", "Opposes", "Advocates for"
-- Unbundle compound stances into separate items
-- Every stance needs a source with a CMD+F-searchable directQuote
-- If no information is available for an issue category, include it with a stance noting "As of February 2026, the candidate's public statements did not contain information on this issue." and set missingData: "issue-specific"
-- Use strictly nonpartisan language per the substitution chart`;
-
-  return provider.generateJSON<any[]>(prompt, {
-    systemPrompt: getCustomPrompt('writer') ?? WRITER_SYSTEM_PROMPT,
-    temperature: 0.3,
-    maxTokens: 8192,
-  });
 }
 
 /**
@@ -851,104 +723,4 @@ RULES:
     bios: biosResult?.bios || [],
     issues: allIssues,
   };
-}
-
-/**
- * Ask the AI to determine which issue categories are relevant for this candidate.
- */
-async function planIssueCategories(
-  provider: AIProvider,
-  input: WriterInput,
-): Promise<string[]> {
-  // If source content is empty or just the "no material" sentinel, don't waste an API call
-  const trimmed = input.sourceContent.trim();
-  const isSourceless = !trimmed || trimmed === '(No source material found from web research)';
-  if (isSourceless) {
-    // Return a minimal set — Writer will mark all as "no information available"
-    return ['economy', 'public-safety', 'healthcare', 'education'];
-  }
-
-  const prompt = `Given the following source material about "${input.candidateName}", list the issue categories that have relevant policy stances or positions. Only include categories where the source material contains actual policy positions or stances.
-
-SOURCE MATERIAL:
-${input.sourceContent.slice(0, 6000)}
-
-Return a JSON array of issue category keys (lowercase, hyphenated). Choose ONLY from this list:
-["economy", "public-safety", "healthcare", "education", "energy-environment", "foreign-policy-immigration", "voting-elections", "consumer-protection", "housing-urban-development", "public-services", "public-health", "school-curriculum", "businesses", "small-businesses", "fire-safety", "insurance", "teachers", "administration", "criminal-justice", "taxes", "financial-management", "retirement", "ethics-corruption"]
-
-RULES:
-- Only include categories where the candidate has SPECIFIC stated positions in the source material.
-- RANK categories by how much source material supports them — strongest first.
-- Each category must have at least one concrete, sourceable policy stance.
-- Return 4-8 categories maximum.
-- If fewer than 4 categories have strong support, return only what is supported — do NOT pad with unsupported categories.
-
-Return the JSON array only.`;
-
-  try {
-    const keys = await provider.generateJSON<string[]>(prompt, {
-      temperature: 0.1,
-      maxTokens: 1024,
-    });
-    return Array.isArray(keys) && keys.length > 0
-      ? keys
-      : ['economy', 'public-safety', 'healthcare', 'education'];
-  } catch {
-    // Fallback — common categories (minimal set)
-    return ['economy', 'public-safety', 'healthcare', 'education'];
-  }
-}
-
-/**
- * Incrementally add a new source to an existing profile.
- * Only updates sections that could benefit from the new information.
- */
-export interface AddSourceInput {
-  currentDraft: Partial<StagingDraft>;
-  candidateName: string;
-  newSource: { url: string; title: string; content: string };
-}
-
-export async function addSourceToProfile(
-  provider: AIProvider,
-  input: AddSourceInput,
-): Promise<Partial<StagingDraft>> {
-  const prompt = `You have an existing candidate profile for "${input.candidateName}" and a NEW source to incorporate.
-
-EXISTING PROFILE:
-${JSON.stringify(input.currentDraft, null, 2)}
-
-NEW SOURCE (${input.newSource.url} — ${input.newSource.title}):
-${input.newSource.content || '(content not loaded — use the URL as reference)'}
-
-Analyze the new source and determine:
-1. Which sections of the profile could be updated or improved with this new information
-2. What new stances, bio details, or corrections this source provides
-
-Return JSON:
-{
-  "changedSections": ["list", "of", "section-keys"],
-  "updatedDraft": { ...the full updated profile with the new source incorporated... },
-  "changes": [
-    { "section": "section-key", "description": "what changed and why" }
-  ]
-}
-
-RULES:
-- Only modify sections where the new source adds genuine value
-- Preserve all existing sources — add, don't replace
-- Use exact quotes from the new source
-- Follow nonpartisan language rules`;
-
-  const result = await provider.generateJSON<{
-    changedSections: string[];
-    updatedDraft: Partial<StagingDraft>;
-    changes: Array<{ section: string; description: string }>;
-  }>(prompt, {
-    systemPrompt: getCustomPrompt('writer') ?? WRITER_SYSTEM_PROMPT,
-    temperature: 0.2,
-    maxTokens: 16384,
-  });
-
-  return result.updatedDraft;
 }
