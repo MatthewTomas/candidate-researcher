@@ -525,7 +525,14 @@ const TIER2_DOMAINS = [
   'postandcourier.com', 'pilotonline.com', 'richmond.com', 'stltoday.com',
   'mercurynews.com', 'sun-sentinel.com', 'baltimoresun.com', 'ajc.com',
   'twincities.com', 'detroitnews.com', 'oklahoman.com', 'arkansasonline.com',
-  // Generic local paper substrings
+];
+/**
+ * Generic local-paper substrings — only used as a last resort AFTER all explicit
+ * domain lists (including Tier 3 partisan sites) have been checked.  Keeping them
+ * separate prevents partisan outlets like washingtontimes.com / huffpost.com from
+ * being incorrectly promoted to Tier 2 via 'times' / 'post' substring matches.
+ */
+const LOCAL_PAPER_SUBSTRINGS = [
   'gazette', 'tribune', 'herald', 'times', 'post', 'journal', 'observer',
   'news-record',
 ];
@@ -547,7 +554,11 @@ function getSourceBiasTier(url: string): 1 | 2 | 3 | 4 {
     if (PROHIBITED_DOMAINS.some(d => hostname.includes(d))) return 4;
     if (TIER1_DOMAINS.some(d => hostname.includes(d) || hostname.endsWith(d))) return 1;
     if (TIER2_DOMAINS.some(d => hostname.includes(d))) return 2;
+    // Check Tier 3 BEFORE generic substrings so partisan outlets like
+    // washingtontimes.com / huffpost.com aren't promoted to Tier 2
     if (TIER3_DOMAINS.some(d => hostname.includes(d))) return 3;
+    // Generic local-paper substring fallback — applied only after all explicit lists
+    if (LOCAL_PAPER_SUBSTRINGS.some(d => hostname.includes(d))) return 2;
     return 4; // unknown
   } catch {
     return 4;
