@@ -298,6 +298,8 @@ export interface WriterInput {
   sourceContent: string;
   previousDraft?: Partial<StagingDraft>;
   criticFeedback?: CriticFeedback;
+  /** Optional AbortSignal — propagated to every AI call so the pipeline can be cancelled mid-generation. */
+  signal?: AbortSignal;
 }
 
 /** How many issues to generate per batch. */
@@ -527,7 +529,7 @@ function filterIssuesForSections(feedback: CriticFeedback | undefined, sectionPr
  */
 export async function runWriter(provider: AIProvider, input: WriterInput): Promise<Partial<StagingDraft>> {
   const systemPrompt = getCustomPrompt('writer') ?? WRITER_SYSTEM_PROMPT;
-  const options = { systemPrompt, temperature: 0.3, maxTokens: 8192 };
+  const options = { systemPrompt, temperature: 0.3, maxTokens: 8192, signal: input.signal };
 
   // Build the opening context message that carries the source material.
   // All subsequent turns reference this via conversation history.

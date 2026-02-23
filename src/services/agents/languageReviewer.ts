@@ -103,6 +103,8 @@ export interface LanguageReviewerInput {
   candidateName: string;
   draft: Partial<StagingDraft>;
   sourceContent: string;
+  /** Optional AbortSignal for cooperative cancellation. */
+  signal?: AbortSignal;
 }
 
 export async function runLanguageReviewer(
@@ -144,6 +146,7 @@ Return JSON:
     systemPrompt: getCustomPrompt('language-reviewer') ?? LANGUAGE_REVIEWER_SYSTEM_PROMPT,
     temperature: 0.2,
     maxTokens: 2048,
+    signal: input.signal,
   });
 
   // Validate/sanitize — AI may return malformed or missing fields

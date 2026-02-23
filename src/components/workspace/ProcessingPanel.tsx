@@ -61,6 +61,8 @@ export default function ProcessingPanel({ onSelect }: ProcessingPanelProps) {
   const [processingLog, setProcessingLog] = useState<string[]>([]);
   const [bulkAction, setBulkAction] = useState<'pause' | 'requeue' | 'delete' | null>(null);
   const isProcessingRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const currentlyProcessingIdRef = useRef<string | null>(null);
 
   // Items visible in this panel: anything not 'queued' or 'complete' or 'skipped'
   const processingItems = batchQueue.filter(i =>
@@ -181,9 +183,14 @@ export default function ProcessingPanel({ onSelect }: ProcessingPanelProps) {
         ));
         addCandidateLog(`[${item.candidateName}] Session created`);
 
+        // Fresh AbortController per candidate — abort() is called from handleBulkPause when paused mid-run
+        const abortCtrl = new AbortController();
+        abortControllerRef.current = abortCtrl;
+        currentlyProcessingIdRef.current = item.id;
+
         // Run pipeline
         await runCandidatePipeline(
-          { session, importedHtml: item.importedHtml, extractedProfile: item.extractedProfile ?? null, sourceUrls: item.sourceUrls },
+          { session, importedHtml: item.importedHtml, extractedProfile: item.extractedProfile ?? null, sourceUrls: item.sourceUrls, signal: abortCtrl.signal },
           settings,
           { getProvider, getTrackedProvider },
           {
@@ -206,6 +213,10 @@ export default function ProcessingPanel({ onSelect }: ProcessingPanelProps) {
         if (logFlushTimer) clearTimeout(logFlushTimer);
         flushLog();
 
+        // Clear abort refs for this candidate
+        abortControllerRef.current = null;
+        currentlyProcessingIdRef.current = null;
+
         // Mark complete — but respect pause/re-queue if user changed status mid-pipeline
         setBatchQueue(prev => prev.map(i => {
           if (i.id !== item.id) return i;
@@ -214,13 +225,23 @@ export default function ProcessingPanel({ onSelect }: ProcessingPanelProps) {
         }));
         addCandidateLog(`[${item.candidateName}] ✅ Complete`);
       } catch (err: any) {
-        // Mark error — but respect pause/re-queue
-        setBatchQueue(prev => prev.map(i => {
-          if (i.id !== item.id) return i;
-          if (i.status === 'paused' || i.status === 'queued') return i;
-          return { ...i, status: 'error' as BatchItemStatus, error: err.message };
-        }));
-        addCandidateLog(`[${item.candidateName}] ❌ Error: ${err.message}`);
+        // Clear abort refs
+        abortControllerRef.current = null;
+        currentlyProcessingIdRef.current = null;
+
+        const isAbort = err instanceof DOMException && err.name === 'AbortError';
+        if (isAbort) {
+          // Pipeline was cancelled via pause — status already set to 'paused' by handleBulkPause
+          addCandidateLog(`[${item.candidateName}] ⏸ Paused mid-pipeline`);
+        } else {
+          // Mark error — but respect pause/re-queue
+          setBatchQueue(prev => prev.map(i => {
+            if (i.id !== item.id) return i;
+            if (i.status === 'paused' || i.status === 'queued') return i;
+            return { ...i, status: 'error' as BatchItemStatus, error: err.message };
+          }));
+          addCandidateLog(`[${item.candidateName}] ❌ Error: ${err.message}`);
+        }
         if (logFlushTimer) clearTimeout(logFlushTimer);
         if (latestSession) {
           updateSession({ ...latestSession, buildLog: [...candidateLog], status: 'complete' });
@@ -255,6 +276,10 @@ export default function ProcessingPanel({ onSelect }: ProcessingPanelProps) {
         ? { ...i, status: 'paused' as BatchItemStatus }
         : i
     ));
+    // Abort the currently-running AI call if the paused item is the one in flight
+    if (currentlyProcessingIdRef.current && ids.includes(currentlyProcessingIdRef.current)) {
+      abortControllerRef.current?.abort();
+    }
     setSelectedIds(new Set());
     setBulkAction(null);
   }, [selectedIds, processingItems, setBatchQueue]);

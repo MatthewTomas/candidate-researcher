@@ -111,6 +111,8 @@ export interface FactCheckerInput {
   sourceContent: string;
   /** Provenance results injected by the pipeline — tells the critic which URLs are fabricated */
   provenanceContext?: string;
+  /** Optional AbortSignal for cooperative cancellation. */
+  signal?: AbortSignal;
 }
 
 export async function runFactChecker(
@@ -155,6 +157,7 @@ Return JSON:
     systemPrompt: getCustomPrompt('fact-checker') ?? FACT_CHECKER_SYSTEM_PROMPT,
     temperature: 0.1,
     maxTokens: 4096,
+    signal: input.signal,
   });
 
   // Validate/sanitize — AI may return malformed or missing fields

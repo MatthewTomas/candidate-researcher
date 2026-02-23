@@ -31,6 +31,8 @@ export interface OrchestratorInput {
   sourceContent: string;
   /** Formatted provenance check results — injected into critic prompts */
   provenanceContext?: string;
+  /** Optional AbortSignal for cooperative cancellation — propagated to all agent calls. */
+  signal?: AbortSignal;
 }
 
 export interface OrchestratorProviders {
@@ -66,6 +68,9 @@ async function withAgentRetry<T>(
     try {
       return await fn();
     } catch (err: any) {
+      // Never retry a user-initiated cancellation — propagate immediately
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
+
       const msg = err instanceof Error ? err.message : String(err);
       const lower = msg.toLowerCase();
       // Only retry on parse errors, rate limits, network issues

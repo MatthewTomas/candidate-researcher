@@ -116,6 +116,8 @@ export interface CombinedCriticInput {
   sourceContent: string;
   /** Provenance results injected by the pipeline — tells the critic which URLs are fabricated */
   provenanceContext?: string;
+  /** Optional AbortSignal for cooperative cancellation. */
+  signal?: AbortSignal;
 }
 
 export async function runCombinedCritic(
@@ -160,6 +162,7 @@ Return JSON:
     systemPrompt: getCustomPrompt('critic') ?? COMBINED_CRITIC_SYSTEM_PROMPT,
     temperature: 0.15,
     maxTokens: 6144,
+    signal: input.signal,
   });
 
   // Validate/sanitize

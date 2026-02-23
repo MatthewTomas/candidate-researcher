@@ -89,6 +89,8 @@ export interface PipelineInput {
   extractedProfile?: ExtractedProfile | null;
   /** User-provided source URLs to seed the research phase */
   sourceUrls?: string[];
+  /** Optional AbortSignal — abort() causes the pipeline to throw DOMException('AbortError') at the next round boundary. */
+  signal?: AbortSignal;
 }
 
 // ============================================================================
@@ -345,6 +347,11 @@ ONLY output the JSON array, no other text.`;
   const pipelineStart = Date.now();
 
   for (let round = currentSession.builderRounds.length + 1; round <= currentSession.builderRounds.length + maxRounds; round++) {
+    // Cooperative abort — check at the start of each round before any AI call
+    if (input.signal?.aborted) {
+      callbacks.onLog(`Pipeline cancelled before round ${round}`);
+      throw new DOMException('Pipeline cancelled', 'AbortError');
+    }
     // --- Writer ---
     const writerRole = settings.roleAssignments?.writer || { provider: 'gemini-free' as AIProviderType };
     callbacks.onLog(`Round ${round}: Writer generating draft (${describeRole(writerRole.provider, writerRole.model)})…`);
@@ -373,6 +380,7 @@ ONLY output the JSON array, no other text.`;
             sourceContent: sourceContext,
             previousDraft: currentSession.currentDraft ?? undefined,
             criticFeedback: previousFeedback ?? undefined,
+            signal: input.signal,
           });
         } catch (err: any) {
           const msg = (err.message || '').toLowerCase();
@@ -474,7 +482,7 @@ ONLY output the JSON array, no other text.`;
 
       const { merged } = await runSpecializedCritics(
         criticProviders,
-        { candidateName: currentSession.candidateName, draft, sourceContent: sourceContext, provenanceContext },
+        { candidateName: currentSession.candidateName, draft, sourceContent: sourceContext, provenanceContext, signal: input.signal },
         settings,
         {
           onAgentStart: (agent, pass, total) => {

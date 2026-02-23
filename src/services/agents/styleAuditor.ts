@@ -163,6 +163,8 @@ export interface StyleAuditorInput {
   candidateName: string;
   draft: Partial<StagingDraft>;
   sourceContent: string;
+  /** Optional AbortSignal for cooperative cancellation. */
+  signal?: AbortSignal;
 }
 
 export async function runStyleAuditor(
@@ -207,6 +209,7 @@ Return JSON:
     systemPrompt: getCustomPrompt('style-auditor') ?? STYLE_AUDITOR_SYSTEM_PROMPT,
     temperature: 0.3,
     maxTokens: 2048,
+    signal: input.signal,
   });
 
   // Validate/sanitize — AI may return malformed or missing fields

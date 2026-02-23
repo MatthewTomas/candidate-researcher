@@ -29,11 +29,23 @@ export class GeminiProvider implements AIProvider {
     if (options?.jsonMode) config.responseMimeType = 'application/json';
     if (options?.systemPrompt) config.systemInstruction = options.systemPrompt;
 
-    const response = await this.client.models.generateContent({
+    const contentPromise = this.client.models.generateContent({
       model: this.model,
       contents: prompt,
       config,
     });
+    const abortPromise = options?.signal
+      ? new Promise<never>((_, reject) => {
+          if (options.signal!.aborted) {
+            reject(new DOMException('Operation aborted', 'AbortError'));
+            return;
+          }
+          options.signal!.addEventListener(
+            'abort', () => reject(new DOMException('Operation aborted', 'AbortError')), { once: true },
+          );
+        })
+      : null;
+    const response = await (abortPromise ? Promise.race([contentPromise, abortPromise]) : contentPromise);
 
     return response.text ?? '';
   }
@@ -71,11 +83,23 @@ export class GeminiProvider implements AIProvider {
       { role: 'user', parts: [{ text: jsonMessage }] },
     ];
 
-    const response = await this.client.models.generateContent({
+    const chatContentPromise = this.client.models.generateContent({
       model: this.model,
       contents,
       config,
     });
+    const chatAbortPromise = options?.signal
+      ? new Promise<never>((_, reject) => {
+          if (options.signal!.aborted) {
+            reject(new DOMException('Operation aborted', 'AbortError'));
+            return;
+          }
+          options.signal!.addEventListener(
+            'abort', () => reject(new DOMException('Operation aborted', 'AbortError')), { once: true },
+          );
+        })
+      : null;
+    const response = await (chatAbortPromise ? Promise.race([chatContentPromise, chatAbortPromise]) : chatContentPromise);
 
     const text = response.text ?? '';
     const result = parseJSONResponse<T>(text, 'Gemini (chat)');
