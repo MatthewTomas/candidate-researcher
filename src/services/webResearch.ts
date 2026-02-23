@@ -710,16 +710,31 @@ export async function researchCandidate(
   const pages: FetchedPage[] = [];
   let totalFailed = 0;
 
-  for (const sr of urlsToFetch) {
-    log(`🌐 Fetching: ${sr.url}`);
-    const page = await fetchPage(sr.url);
-    if (page.error) {
-      log(`   ⚠ Failed: ${page.error}`);
-      totalFailed++;
-    } else {
-      log(`   📄 Extracted ${page.text.length.toLocaleString()} chars from ${page.title}`);
+  // Fetch pages in parallel batches to cut wall-clock time.
+  // Sequential fetching at 10s timeout = up to 250s for 25 URLs.
+  // At concurrency-5 that drops to ~50-60s in practice.
+  const FETCH_CONCURRENCY = 5;
+  for (let batchStart = 0; batchStart < urlsToFetch.length; batchStart += FETCH_CONCURRENCY) {
+    const batch = urlsToFetch.slice(batchStart, batchStart + FETCH_CONCURRENCY);
+    for (const sr of batch) log(`🌐 Fetching: ${sr.url}`);
+
+    const settled = await Promise.allSettled(batch.map(sr => fetchPage(sr.url)));
+
+    for (const result of settled) {
+      if (result.status === 'fulfilled') {
+        const page = result.value;
+        if (page.error) {
+          log(`   ⚠ Failed: ${page.error.slice(0, 80)}`);
+          totalFailed++;
+        } else {
+          log(`   📄 ${page.text.length.toLocaleString()} chars — ${page.title.slice(0, 60)}`);
+        }
+        pages.push(page);
+      } else {
+        // Promise itself rejected (shouldn't happen — fetchPage catches internally)
+        totalFailed++;
+      }
     }
-    pages.push(page);
   }
 
   const successPages = pages.filter(p => !p.error && p.text.length > 50);
