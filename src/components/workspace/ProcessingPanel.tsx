@@ -63,6 +63,9 @@ export default function ProcessingPanel({ onSelect }: ProcessingPanelProps) {
   const isProcessingRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentlyProcessingIdRef = useRef<string | null>(null);
+  // Mirror of batchQueue for use inside runBatch's useCallback — prevents stale-closure reads
+  const batchQueueRef = useRef(batchQueue);
+  useEffect(() => { batchQueueRef.current = batchQueue; }, [batchQueue]);
 
   // Items visible in this panel: anything not 'queued' or 'complete' or 'skipped'
   const processingItems = batchQueue.filter(i =>
@@ -137,8 +140,8 @@ export default function ProcessingPanel({ onSelect }: ProcessingPanelProps) {
     addLog('✅ All API keys valid. Starting batch…');
 
     for (const item of queuedItems) {
-      // Skip if paused/deleted while loop was running
-      const current = batchQueue.find(i => i.id === item.id);
+      // Skip if paused/deleted while loop was running — use ref to avoid stale closure
+      const current = batchQueueRef.current.find(i => i.id === item.id);
       if (current?.status === 'paused') {
         addLog(`⏸ Skipping ${item.candidateName} (paused)`);
         continue;
