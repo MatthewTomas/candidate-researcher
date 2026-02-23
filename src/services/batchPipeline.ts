@@ -113,6 +113,10 @@ export async function runCandidatePipeline(
 ): Promise<CandidateSession> {
   let currentSession = { ...input.session };
 
+  // Ephemeral pipeline-local state — not stored on the session object
+  let _researchContent = '';
+  let _discoveredSocialLinks: LinkItem[] | undefined;
+
   // ── Helper: get a tracked provider (falls back to untracked if not available) ──
   // Also resolves gemini-free → gemini-paid when the user is on a paid tier
   const resolveProvider = async (type: AIProviderType, role: string, model?: string): Promise<AIProvider> => {
@@ -182,7 +186,7 @@ export async function runCandidatePipeline(
     try {
       const researchResult = await researchCandidate(
         currentSession.candidateName,
-        (currentSession as any).metadata || undefined,
+        currentSession.metadata || undefined,
         settings,
         input.sourceUrls || [],
         callbacks.onLog,
@@ -209,8 +213,8 @@ export async function runCandidatePipeline(
 
       // Build the source content from research results
       const researchContent = formatResearchAsSourceContent(researchResult);
-      // Attach to session for the Writer to consume
-      (currentSession as any)._researchContent = researchContent;
+      // Store in pipeline-local variable for the Writer to consume
+      _researchContent = researchContent;
 
       // Extract social media links from fetched URLs
       const rawSocialLinks = extractSocialLinksFromPages(researchResult.pages);
@@ -233,9 +237,9 @@ export async function runCandidatePipeline(
           const validationPrompt = `You are verifying whether social media URLs belong to a specific political candidate.
 
 Candidate: ${currentSession.candidateName}
-${(currentSession as any).metadata?.state ? `State: ${(currentSession as any).metadata.state}` : ''}
-${(currentSession as any).metadata?.office ? `Office: ${(currentSession as any).metadata.office}` : ''}
-${(currentSession as any).metadata?.party ? `Party: ${(currentSession as any).metadata.party}` : ''}
+${currentSession.metadata?.state ? `State: ${currentSession.metadata.state}` : ''}
+${currentSession.metadata?.officeName ? `Office: ${currentSession.metadata.officeName}` : ''}
+${currentSession.metadata?.party ? `Party: ${currentSession.metadata.party}` : ''}
 
 For each URL below, determine if it belongs to THIS specific candidate (not someone else with the same name).
 
@@ -282,8 +286,8 @@ ONLY output the JSON array, no other text.`;
           // Fall through with unvalidated links
         }
 
-        // Store validated links for merging into draft after Writer produces one
-        (currentSession as any)._discoveredSocialLinks = socialLinks;
+        // Store validated links in pipeline-local variable for merging after first Writer round
+        _discoveredSocialLinks = socialLinks;
       }
 
       // Log source quality summary
@@ -368,7 +372,7 @@ ONLY output the JSON array, no other text.`;
     const additionalSourcesText = currentSession.additionalSources
       .map(s => `- ${s.title}: ${s.url}`).join('\n');
     // Include web research content if available
-    const researchContent = (currentSession as any)._researchContent || '';
+    const researchContent = _researchContent;
     const sourceContext = [researchContent, extractedText, additionalSourcesText].filter(Boolean).join('\n\n');
 
     const draft = await (async () => {
@@ -534,7 +538,7 @@ ONLY output the JSON array, no other text.`;
     };
 
     // Merge discovered social links into the draft (first round only)
-    const discoveredLinks = (currentSession as any)._discoveredSocialLinks as LinkItem[] | undefined;
+    const discoveredLinks = _discoveredSocialLinks;
     if (discoveredLinks?.length && currentSession.currentDraft) {
       const existingUrls = new Set((currentSession.currentDraft.links || []).map(l => l.url));
       const newLinks = discoveredLinks.filter(sl => !existingUrls.has(sl.url));
@@ -547,7 +551,7 @@ ONLY output the JSON array, no other text.`;
           },
         };
       }
-      delete (currentSession as any)._discoveredSocialLinks;
+      _discoveredSocialLinks = undefined;
     }
 
     callbacks.onSessionUpdate(currentSession);
