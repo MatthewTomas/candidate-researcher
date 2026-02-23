@@ -14,6 +14,7 @@ import QueuePanel from '../components/workspace/QueuePanel';
 import ProcessingPanel from '../components/workspace/ProcessingPanel';
 import HistoryPanel from '../components/workspace/HistoryPanel';
 import CandidateSidePanel from '../components/CandidateSidePanel';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import type { BatchQueueItem } from '../types';
 
 const STORAGE_KEY = 'branch-playground-col-widths';
@@ -92,21 +93,27 @@ export default function WorkspacePage() {
       <div className="flex flex-1 min-w-0 overflow-hidden">
         {/* Column A — Queue */}
         <div style={{ width: leftW, minWidth: MIN_COL }} className="shrink-0 overflow-hidden flex flex-col border-r border-gray-200">
-          <QueuePanel onSelect={setPanelItem} />
+          <ErrorBoundary inline label="Queue">
+            <QueuePanel onSelect={setPanelItem} />
+          </ErrorBoundary>
         </div>
 
         <ResizeHandle onDrag={onLeftStart} />
 
         {/* Column B — Processing */}
         <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-          <ProcessingPanel onSelect={setPanelItem} />
+          <ErrorBoundary inline label="Processing">
+            <ProcessingPanel onSelect={setPanelItem} />
+          </ErrorBoundary>
         </div>
 
         <ResizeHandle onDrag={onRightStart} />
 
         {/* Column C — History */}
         <div style={{ width: rightW, minWidth: MIN_COL }} className="shrink-0 overflow-hidden flex flex-col border-l border-gray-200">
-          <HistoryPanel onSelect={setPanelItem} />
+          <ErrorBoundary inline label="History">
+            <HistoryPanel onSelect={setPanelItem} />
+          </ErrorBoundary>
         </div>
       </div>
 

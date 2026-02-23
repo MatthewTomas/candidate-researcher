@@ -2,6 +2,14 @@ import React, { Component, type ErrorInfo, type ReactNode } from 'react';
 
 interface Props {
   children: ReactNode;
+  /**
+   * When true, renders a compact inline error panel instead of a full-screen overlay.
+   * Use this to wrap individual workspace columns or sections so a crash in one area
+   * doesn't take down the entire UI.
+   */
+  inline?: boolean;
+  /** Human-readable label for the failing panel (shown in inline mode). */
+  label?: string;
 }
 
 interface State {
@@ -46,6 +54,34 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (!this.state.hasError) return this.props.children;
 
+    // ── Inline (panel-level) fallback ──────────────────────────────
+    if (this.props.inline) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full p-6 text-center">
+          <div className="h-10 w-10 rounded-xl bg-red-100 flex items-center justify-center mb-3">
+            <svg className="h-5 w-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
+            </svg>
+          </div>
+          <h3 className="text-sm font-bold text-gray-800 mb-1">
+            {this.props.label ? `${this.props.label} crashed` : 'Panel error'}
+          </h3>
+          {this.state.error && (
+            <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-3 font-mono max-w-xs truncate">
+              {this.state.error.message}
+            </p>
+          )}
+          <button
+            onClick={this.handleReset}
+            className="text-xs font-medium text-branch-600 hover:text-branch-700 underline"
+          >
+            Try again
+          </button>
+        </div>
+      );
+    }
+
+    // ── Full-screen fallback (app-level) ──────────────────────────
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl shadow-xl border border-red-200 max-w-lg w-full p-8 text-center">
